@@ -1,0 +1,23 @@
+experiment:
+  name: "baseline_knn_f1optimal"
+  description: "KNN baseline with F1-optimal threshold tuning"
+
+data_processing:
+  type: "RawWindowProcessor"
+  window_size: 100
+  stride: 1
+
+detection:
+  type: "DistanceBasedDetection"
+  params:
+    method: "knn"
+    k: 5
+
+scoring:
+  type: "MaxPoolingScoring"
+
+postprocessing:
+  threshold:
+    type: "F1OptimalThreshold"
+  min_anomaly_length: 3
+  merge_gap: 5

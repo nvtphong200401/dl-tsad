@@ -1,0 +1,32 @@
+experiment:
+  name: "aer"
+  description: "AER: Auto-Encoder with Regression (SOTA)"
+
+data_processing:
+  type: "AERProcessor"
+  window_size: 100
+  stride: 1
+  params:
+    hidden_dim: 64          # Use smaller for faster training on CPU
+    num_layers: 2
+    dropout: 0.1
+    alpha: 0.5              # Weight: reconstruction vs prediction
+    epochs: 20              # Reduced for faster training
+    batch_size: 32
+    learning_rate: 0.001
+    device: "cpu"           # Change to "cuda" if GPU available
+
+detection:
+  type: "HybridDetection"
+  params:
+    alpha: 0.5              # Weight: reconstruction vs prediction
+    beta: 0.5               # Weight: forward vs backward prediction
+
+scoring:
+  type: "WeightedAverageScoring"
+
+postprocessing:
+  threshold:
+    type: "F1OptimalThreshold"
+  min_anomaly_length: 3
+  merge_gap: 5

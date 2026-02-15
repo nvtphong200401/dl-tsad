@@ -1,0 +1,32 @@
+experiment:
+  name: "anomaly_transformer"
+  description: "Anomaly Transformer with Association Discrepancy (SOTA)"
+
+data_processing:
+  type: "AnomalyTransformerProcessor"
+  window_size: 100
+  stride: 1
+  params:
+    d_model: 256            # Use smaller for faster training on CPU
+    n_heads: 8
+    n_layers: 3
+    dropout: 0.1
+    lambda_assoc: 1.0
+    epochs: 10              # Fast training!
+    batch_size: 32
+    learning_rate: 0.0001
+    device: "cpu"           # Change to "cuda" if GPU available
+
+detection:
+  type: "AssociationDiscrepancyDetection"
+
+scoring:
+  type: "MaxPoolingScoring"
+
+postprocessing:
+  threshold:
+    type: "PercentileThreshold"
+    params:
+      percentile: 95.0
+  min_anomaly_length: 1
+  merge_gap: 0

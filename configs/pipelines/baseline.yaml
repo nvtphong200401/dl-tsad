@@ -1,0 +1,25 @@
+experiment:
+  name: "baseline_knn"
+  description: "Simple KNN-based baseline with raw windows"
+
+data_processing:
+  type: "RawWindowProcessor"
+  window_size: 100
+  stride: 1
+
+detection:
+  type: "DistanceBasedDetection"
+  params:
+    method: "knn"
+    k: 5
+
+scoring:
+  type: "MaxPoolingScoring"
+
+postprocessing:
+  threshold:
+    type: "PercentileThreshold"
+    params:
+      percentile: 95.0
+  min_anomaly_length: 1
+  merge_gap: 0

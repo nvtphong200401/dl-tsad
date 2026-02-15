@@ -1,0 +1,14 @@
+{
+  "pipeline": "baseline_knn_f1optimal",
+  "config": "configs/pipelines/baseline_f1optimal.yaml",
+  "timestamp": "20260215_220449",
+  "num_categories": 8,
+  "avg_f1": 0.397420705598509,
+  "avg_precision": 0.33310283443254807,
+  "avg_recall": 0.5193198927018026,
+  "avg_pa_f1": 0.506180793691675,
+  "best_category": "noisy-point",
+  "best_f1": 0.48650495387769044,
+  "worst_category": "freq",
+  "worst_f1": 0.2699090716853458
+}

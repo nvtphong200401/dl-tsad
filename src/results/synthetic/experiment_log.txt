@@ -1,0 +1,348 @@
+======================================================================
+Best TSAD - AnomLLM Experiment Runner
+======================================================================
+
+Loading config from: configs/pipelines/baseline_f1optimal.yaml
+Pipeline: baseline_knn_f1optimal
+
+----------------------------------------------------------------------
+Loading AnomLLM datasets...
+----------------------------------------------------------------------
+[OK] Loaded point: 200000 test samples, 6210 anomalies
+[OK] Loaded trend: 200000 test samples, 7273 anomalies
+[OK] Loaded range: 200000 test samples, 4966 anomalies
+[OK] Loaded freq: 200000 test samples, 6969 anomalies
+[OK] Loaded noisy-point: 200000 test samples, 6395 anomalies
+[OK] Loaded noisy-trend: 200000 test samples, 7176 anomalies
+[OK] Loaded noisy-freq: 200000 test samples, 7317 anomalies
+[OK] Loaded flat-trend: 200000 test samples, 7273 anomalies
+
+Successfully loaded 8 categories
+
+======================================================================
+CATEGORY: POINT
+======================================================================
+
+Dataset info:
+  Train size: 400000 (13590 anomalies)
+  Val size:   200000 (6576 anomalies)
+  Test size:  200000 (6210 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 0.73s
+  Step 2: Fitting detection method...
+    Fitted in 0.04s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 6.5383
+  Validation F1: 0.459 (P: 0.457, R: 0.461)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.486
+Precision:         0.502
+Recall:            0.471
+PA-F1 Score:       0.277
+Detected:          5829/6210
+Inference time:    155.4339s
+----------------------------------------------------------------------
+
+======================================================================
+CATEGORY: TREND
+======================================================================
+
+Dataset info:
+  Train size: 400000 (16990 anomalies)
+  Val size:   200000 (7791 anomalies)
+  Test size:  200000 (7273 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 1.83s
+  Step 2: Fitting detection method...
+    Fitted in 0.09s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 2.0242
+  Validation F1: 0.359 (P: 0.334, R: 0.388)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.369
+Precision:         0.311
+Recall:            0.455
+PA-F1 Score:       0.553
+Detected:          10653/7273
+Inference time:    162.1530s
+----------------------------------------------------------------------
+
+======================================================================
+CATEGORY: RANGE
+======================================================================
+
+Dataset info:
+  Train size: 400000 (8440 anomalies)
+  Val size:   200000 (4487 anomalies)
+  Test size:  200000 (4966 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 0.84s
+  Step 2: Fitting detection method...
+    Fitted in 0.04s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 12.1799
+  Validation F1: 0.404 (P: 0.312, R: 0.571)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.413
+Precision:         0.316
+Recall:            0.598
+PA-F1 Score:       0.495
+Detected:          9410/4966
+Inference time:    177.3553s
+----------------------------------------------------------------------
+
+======================================================================
+CATEGORY: FREQ
+======================================================================
+
+Dataset info:
+  Train size: 400000 (13608 anomalies)
+  Val size:   200000 (6654 anomalies)
+  Test size:  200000 (6969 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 0.92s
+  Step 2: Fitting detection method...
+    Fitted in 0.03s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 3.9320
+  Validation F1: 0.313 (P: 0.258, R: 0.398)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.270
+Precision:         0.191
+Recall:            0.458
+PA-F1 Score:       0.556
+Detected:          16676/6969
+Inference time:    174.1249s
+----------------------------------------------------------------------
+
+======================================================================
+CATEGORY: NOISY-POINT
+======================================================================
+
+Dataset info:
+  Train size: 400000 (12672 anomalies)
+  Val size:   200000 (6735 anomalies)
+  Test size:  200000 (6395 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 1.03s
+  Step 2: Fitting detection method...
+    Fitted in 0.06s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 5.8951
+  Validation F1: 0.448 (P: 0.377, R: 0.551)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.487
+Precision:         0.432
+Recall:            0.557
+PA-F1 Score:       0.366
+Detected:          8240/6395
+Inference time:    108.9011s
+----------------------------------------------------------------------
+
+======================================================================
+CATEGORY: NOISY-TREND
+======================================================================
+
+Dataset info:
+  Train size: 400000 (18085 anomalies)
+  Val size:   200000 (7058 anomalies)
+  Test size:  200000 (7176 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 0.94s
+  Step 2: Fitting detection method...
+    Fitted in 0.07s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 2.3932
+  Validation F1: 0.395 (P: 0.304, R: 0.563)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.446
+Precision:         0.354
+Recall:            0.605
+PA-F1 Score:       0.616
+Detected:          12261/7176
+Inference time:    143.0097s
+----------------------------------------------------------------------
+
+======================================================================
+CATEGORY: NOISY-FREQ
+======================================================================
+
+Dataset info:
+  Train size: 400000 (15822 anomalies)
+  Val size:   200000 (7040 anomalies)
+  Test size:  200000 (7317 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 1.36s
+  Step 2: Fitting detection method...
+    Fitted in 0.06s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 3.9523
+  Validation F1: 0.304 (P: 0.257, R: 0.373)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.306
+Precision:         0.216
+Recall:            0.528
+PA-F1 Score:       0.577
+Detected:          17883/7317
+Inference time:    165.6589s
+----------------------------------------------------------------------
+
+======================================================================
+CATEGORY: FLAT-TREND
+======================================================================
+
+Dataset info:
+  Train size: 400000 (16990 anomalies)
+  Val size:   200000 (7791 anomalies)
+  Test size:  200000 (7273 anomalies)
+  Dimensions: 1
+
+Building pipeline...
+
+Training...
+Training pipeline on data shape: (400000, 1)
+  Step 1: Data processing...
+    Processed to (399901, 100, 1) in 0.83s
+  Step 2: Fitting detection method...
+    Fitted in 0.04s
+Pipeline training complete!
+
+Validating (tuning threshold)...
+  Threshold determined: 0.0486
+  Validation F1: 0.438 (P: 0.335, R: 0.632)
+
+Testing...
+
+----------------------------------------------------------------------
+RESULTS
+----------------------------------------------------------------------
+F1 Score:          0.402
+Precision:         0.344
+Recall:            0.483
+PA-F1 Score:       0.610
+Detected:          10234/7273
+Inference time:    179.5852s
+----------------------------------------------------------------------
+
+======================================================================
+SUMMARY OF ALL RESULTS
+======================================================================
+   category               pipeline       f1  precision   recall    pa_f1  threshold  detected  total_anomalies  test_size  inference_time  train_time
+      point baseline_knn_f1optimal 0.485755   0.501630 0.470853 0.276923   6.634995      5829             6210     200000      155.433861    0.771057
+      trend baseline_knn_f1optimal 0.369408   0.310804 0.455245 0.552846   2.130776     10653             7273     200000      162.152951    1.926883
+      range baseline_knn_f1optimal 0.413328   0.315728 0.598268 0.495356  11.778393      9410             4966     200000      177.355268    0.873234
+       freq baseline_knn_f1optimal 0.269909   0.191353 0.457885 0.555556   2.952783     16676             6969     200000      174.124878    0.949377
+noisy-point baseline_knn_f1optimal 0.486505   0.432039 0.556685 0.366300   6.234726      8240             6395     200000      108.901088    1.093295
+noisy-trend baseline_knn_f1optimal 0.446365   0.353805 0.604515 0.616186   2.384325     12261             7176     200000      143.009723    1.007650
+ noisy-freq baseline_knn_f1optimal 0.306429   0.215903 0.527675 0.576547   3.228854     17883             7317     200000      165.658892    1.421713
+ flat-trend baseline_knn_f1optimal 0.401668   0.343561 0.483432 0.609732   0.069634     10234             7273     200000      179.585167    0.868795
+
+[SAVED] Results saved to: src/results/synthetic/results_baseline_knn_f1optimal_20260215_220449.csv
+[SAVED] Summary saved to: src/results/synthetic/summary_baseline_knn_f1optimal_20260215_220449.json
+
+======================================================================
+SUMMARY STATISTICS
+======================================================================
+Average F1:        0.397
+Average Precision: 0.333
+Average Recall:    0.519
+Average PA-F1:     0.506
+
+Best:  noisy-point     (F1: 0.487)
+Worst: freq            (F1: 0.270)
+======================================================================
+
+======================================================================
+Experiment complete!
+======================================================================
