@@ -56,7 +56,7 @@ from src.evaluation.evaluator import Evaluator
 # ---------------------------------------------------------------------------
 # Default paths (override via CLI args)
 # ---------------------------------------------------------------------------
-DEFAULT_DATA_PATH = "/kaggle/input/anomllm-synthetic"
+DEFAULT_DATA_PATH = "/kaggle/working/dl-tsad/best-tsad/src/data/synthetic"
 DEFAULT_OUTPUT_DIR = "/kaggle/working"
 CONFIG_DIR = REPO_ROOT / "configs" / "pipelines"
 
