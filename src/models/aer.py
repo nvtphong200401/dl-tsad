@@ -1,6 +1,20 @@
 """AER: Auto-Encoder with Regression for Time Series Anomaly Detection
 
 Reference: Wong et al., IEEE Big Data 2022
+Canonical implementation: https://github.com/sintel-dev/Orion (orion.primitives.aer)
+
+Architecture (following the Orion reference):
+    - Encoder: BiLSTM → latent vector (final hidden states concatenated)
+    - Decoder: RepeatVector(seq_len + 2) → BiLSTM → TimeDistributed(Dense)
+    - The decoder output is split into three parts:
+        ry: first timestep  → backward regression (predicts timestep before the window)
+        y:  middle timesteps → reconstruction   (reconstructs the trimmed input)
+        fy: last timestep   → forward regression (predicts timestep after the window)
+
+Training protocol:
+    - Input to model:  x_trimmed = x_full[:, 1:-1, :]  (first & last removed)
+    - Targets:         ry_target = x_full[:, 0],  y_target = x_full[:, 1:-1],  fy_target = x_full[:, -1]
+    - Loss = (reg_ratio/2)*MSE(ry, ry_target) + (1-reg_ratio)*MSE(y, y_target) + (reg_ratio/2)*MSE(fy, fy_target)
 """
 
 import torch
@@ -10,135 +24,112 @@ from typing import Tuple
 
 
 class AERModel(nn.Module):
-    """BiLSTM Encoder-Decoder + Regressor for AER
+    """Auto-Encoder with Bidirectional Regression (AER)
 
-    Combines reconstruction (autoencoder) and prediction (regressor)
-    with bidirectional scoring for robust anomaly detection.
+    A single encoder-decoder that simultaneously reconstructs its input
+    and predicts adjacent timesteps via bidirectional regression.
 
     Args:
-        input_dim: Input dimension (number of channels)
-        hidden_dim: Hidden dimension for LSTM layers
-        num_layers: Number of LSTM layers
-        dropout: Dropout rate
+        input_dim:  Number of input channels / features
+        lstm_units: Hidden units per direction for BiLSTM
+                    (default 30, matching the Orion reference)
+        num_layers: Number of stacked LSTM layers (default 1)
+        dropout:    Dropout rate between LSTM layers
     """
 
     def __init__(self,
                  input_dim: int,
-                 hidden_dim: int = 128,
-                 num_layers: int = 2,
-                 dropout: float = 0.1):
+                 lstm_units: int = 30,
+                 num_layers: int = 1,
+                 dropout: float = 0.0):
         super().__init__()
 
         self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
+        self.lstm_units = lstm_units
         self.num_layers = num_layers
+        self.latent_dim = lstm_units * 2          # BiLSTM concat
 
-        # Encoder (BiLSTM)
+        # ---- Encoder ---- BiLSTM  →  latent vector  ----
         self.encoder = nn.LSTM(
-            input_dim,
-            hidden_dim,
-            num_layers,
-            batch_first=True,
-            bidirectional=True,
+            input_dim, lstm_units, num_layers,
+            batch_first=True, bidirectional=True,
             dropout=dropout if num_layers > 1 else 0
         )
 
-        # Decoder (BiLSTM)
-        self.decoder = nn.LSTM(
-            hidden_dim * 2,  # Bidirectional encoder output
-            hidden_dim,
-            num_layers,
-            batch_first=True,
-            bidirectional=True,
+        # ---- Decoder ---- RepeatVector → BiLSTM → Dense  ----
+        self.decoder_lstm = nn.LSTM(
+            self.latent_dim, lstm_units, num_layers,
+            batch_first=True, bidirectional=True,
             dropout=dropout if num_layers > 1 else 0
         )
+        # TimeDistributed(Dense(input_dim))
+        self.output_fc = nn.Linear(self.latent_dim, input_dim)
 
-        # Reconstruction output
-        self.recon_fc = nn.Linear(hidden_dim * 2, input_dim)
+    # -- kept for backward-compat with metadata loading (hidden_dim alias) --
+    @property
+    def hidden_dim(self):
+        return self.lstm_units
 
-        # Forward predictor (LSTM)
-        self.predictor_forward = nn.LSTM(
-            input_dim,
-            hidden_dim,
-            num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0
-        )
-        self.pred_fc_forward = nn.Linear(hidden_dim, input_dim)
-
-        # Backward predictor (LSTM on reversed sequence)
-        self.predictor_backward = nn.LSTM(
-            input_dim,
-            hidden_dim,
-            num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0
-        )
-        self.pred_fc_backward = nn.Linear(hidden_dim, input_dim)
-
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x_trimmed: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass
 
         Args:
-            x: Input tensor (batch, seq_len, input_dim)
+            x_trimmed: (batch, seq_len, input_dim)
+                       The trimmed input (first & last timesteps already removed).
 
         Returns:
-            recon: Reconstructed sequence (batch, seq_len, input_dim)
-            pred_forward: Forward predictions (batch, seq_len, input_dim)
-            pred_backward: Backward predictions (batch, seq_len, input_dim)
+            ry: (batch, input_dim)           — backward regression
+            y:  (batch, seq_len, input_dim)  — reconstruction
+            fy: (batch, input_dim)           — forward regression
         """
-        batch_size, seq_len, _ = x.shape
+        batch_size, seq_len, _ = x_trimmed.shape
+        decode_len = seq_len + 2     # RepeatVector(trimmed_len + 2) = original window size
 
-        # Encode
-        encoded, _ = self.encoder(x)
+        # Encode  →  bottleneck vector
+        _, (h_n, _) = self.encoder(x_trimmed)
+        # h_n: (num_layers * num_directions, batch, lstm_units)
+        h_forward = h_n[-2]          # last-layer forward  (batch, lstm_units)
+        h_backward = h_n[-1]         # last-layer backward (batch, lstm_units)
+        latent = torch.cat([h_forward, h_backward], dim=-1)   # (batch, latent_dim)
 
-        # Decode (reconstruct)
-        decoded, _ = self.decoder(encoded)
-        recon = self.recon_fc(decoded)
+        # Decode  →  RepeatVector + BiLSTM + Dense
+        repeated = latent.unsqueeze(1).expand(-1, decode_len, -1)  # (batch, decode_len, latent_dim)
+        decoded, _ = self.decoder_lstm(repeated)                   # (batch, decode_len, latent_dim)
+        output = self.output_fc(decoded)                           # (batch, decode_len, input_dim)
 
-        # Forward prediction
-        pred_f_hidden, _ = self.predictor_forward(x)
-        pred_forward = self.pred_fc_forward(pred_f_hidden)
+        # Split into [ry, y, fy]
+        ry = output[:, 0]            # (batch, input_dim)      backward regression
+        y  = output[:, 1:-1]         # (batch, seq_len, input_dim) reconstruction
+        fy = output[:, -1]           # (batch, input_dim)      forward regression
 
-        # Backward prediction (reverse sequence)
-        x_reversed = torch.flip(x, dims=[1])
-        pred_b_hidden, _ = self.predictor_backward(x_reversed)
-        pred_backward = self.pred_fc_backward(pred_b_hidden)
-        pred_backward = torch.flip(pred_backward, dims=[1])  # Flip back
-
-        return recon, pred_forward, pred_backward
+        return ry, y, fy
 
     def compute_loss(self,
-                    x: torch.Tensor,
-                    recon: torch.Tensor,
-                    pred_forward: torch.Tensor,
-                    pred_backward: torch.Tensor,
-                    alpha: float = 0.5) -> torch.Tensor:
-        """Compute joint loss
+                     x_full: torch.Tensor,
+                     ry: torch.Tensor,
+                     y: torch.Tensor,
+                     fy: torch.Tensor,
+                     reg_ratio: float = 0.5) -> torch.Tensor:
+        """Compute AER loss with proper weighting (matches Orion reference)
 
         Args:
-            x: Original input (batch, seq_len, input_dim)
-            recon: Reconstructed sequence
-            pred_forward: Forward predictions
-            pred_backward: Backward predictions
-            alpha: Weight between reconstruction and prediction (0-1)
+            x_full:    Original *full* windows (batch, window_size, input_dim)
+            ry:        Backward regression output  (batch, input_dim)
+            y:         Reconstruction output        (batch, window_size-2, input_dim)
+            fy:        Forward regression output    (batch, input_dim)
+            reg_ratio: Regression-vs-reconstruction ratio (default 0.5)
 
         Returns:
-            Total loss
+            Weighted combined loss scalar
         """
-        # Reconstruction loss
-        recon_loss = F.mse_loss(recon, x)
+        target_ry = x_full[:, 0]       # first timestep
+        target_y  = x_full[:, 1:-1]    # middle portion
+        target_fy = x_full[:, -1]      # last timestep
 
-        # Forward prediction loss (predict next timestep)
-        pred_loss_f = F.mse_loss(pred_forward[:, :-1], x[:, 1:])
+        loss_ry = F.mse_loss(ry, target_ry)
+        loss_y  = F.mse_loss(y,  target_y)
+        loss_fy = F.mse_loss(fy, target_fy)
 
-        # Backward prediction loss (predict previous timestep)
-        pred_loss_b = F.mse_loss(pred_backward[:, 1:], x[:, :-1])
-
-        # Combined prediction loss
-        pred_loss = (pred_loss_f + pred_loss_b) / 2
-
-        # Joint loss
-        loss = alpha * recon_loss + (1 - alpha) * pred_loss
-
+        # Reference loss_weights = [reg_ratio/2, 1-reg_ratio, reg_ratio/2]
+        loss = (reg_ratio / 2) * loss_ry + (1 - reg_ratio) * loss_y + (reg_ratio / 2) * loss_fy
         return loss

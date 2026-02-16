@@ -41,16 +41,19 @@ class PretrainedAERProcessor:
         with open(metadata_path, 'rb') as f:
             self.metadata = pickle.load(f)
 
-        # Recreate model
+        # Recreate model (supports both old hidden_dim and new lstm_units metadata)
+        lstm_units = self.metadata.get('lstm_units',
+                         self.metadata.get('hidden_dim', 30))
         self.model = AERModel(
             input_dim=self.metadata['input_dim'],
-            hidden_dim=self.metadata['hidden_dim'],
-            num_layers=self.metadata['num_layers']
+            lstm_units=lstm_units,
+            num_layers=self.metadata.get('num_layers', 1)
         ).to(device)
 
         # Load weights
         self.model.load_state_dict(torch.load(model_path, map_location=device))
         self.model.eval()
+        self.input_dim = self.metadata['input_dim']
 
         print(f"Loaded pre-trained AER model (F1: {self.metadata.get('f1', 'N/A')})")
 
@@ -72,17 +75,20 @@ class PretrainedAERProcessor:
         return np.array(windows)
 
     def _process_windows(self, windows):
-        """Generate outputs from pre-trained model"""
+        """Compute per-window error features [rec, reg_b, reg_f] matching AERProcessor"""
         with torch.no_grad():
-            x = torch.FloatTensor(windows).to(self.device)
-            recon, pred_f, pred_b = self.model(x)
-            processed = torch.cat([
-                x.flatten(1),
-                recon.flatten(1),
-                pred_f.flatten(1),
-                pred_b.flatten(1)
-            ], dim=1)
-        return processed.cpu().numpy()
+            x_full = torch.FloatTensor(windows).to(self.device)  # (N, W, D)
+            x_trimmed = x_full[:, 1:-1, :]                       # (N, W-2, D)
+
+            ry, y, fy = self.model(x_trimmed)
+
+            rec_error = torch.mean((x_trimmed - y) ** 2, dim=(1, 2))
+            reg_error_b = torch.mean((x_full[:, 0] - ry) ** 2, dim=1)
+            reg_error_f = torch.mean((x_full[:, -1] - fy) ** 2, dim=1)
+
+            errors = torch.stack([rec_error, reg_error_b, reg_error_f], dim=1)
+
+        return errors.cpu().numpy()
 
 
 def run_pretrained_experiments(model_type: str = 'aer',
@@ -123,7 +129,7 @@ def run_pretrained_experiments(model_type: str = 'aer',
 
     if model_type == 'aer':
         data_processor = PretrainedAERProcessor(model_path, metadata_path, window_config)
-        detection_method = HybridDetection(alpha=0.5, beta=0.5)
+        detection_method = HybridDetection(comb="mult")
         scoring_method = WeightedAverageScoring()
     else:
         print("ERROR: Only AER is implemented for pre-trained loading")

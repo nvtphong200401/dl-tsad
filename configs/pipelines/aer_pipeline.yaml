@@ -1,26 +1,28 @@
 experiment:
   name: "aer"
-  description: "AER: Auto-Encoder with Regression (SOTA)"
+  description: "AER: Auto-Encoder with Regression (Orion reference)"
 
 data_processing:
   type: "AERProcessor"
   window_size: 100
   stride: 1
   params:
-    hidden_dim: 64          # Use smaller for faster training on CPU
-    num_layers: 2
-    dropout: 0.1
-    alpha: 0.5              # Weight: reconstruction vs prediction
-    epochs: 20              # Reduced for faster training
-    batch_size: 32
+    lstm_units: 30            # Hidden units per direction for BiLSTM
+    num_layers: 1
+    dropout: 0.0
+    reg_ratio: 0.5            # Regression vs reconstruction weight
+    epochs: 35
+    batch_size: 64
     learning_rate: 0.001
-    device: "cpu"           # Change to "cuda" if GPU available
+    validation_split: 0.2
+    patience: 10              # Early stopping patience
+    device: "cpu"             # Change to "cuda" if GPU available
 
 detection:
   type: "HybridDetection"
   params:
-    alpha: 0.5              # Weight: reconstruction vs prediction
-    beta: 0.5               # Weight: forward vs backward prediction
+    comb: "mult"              # Multiplicative scoring (matching Orion)
+    lambda_rec: 0.5
 
 scoring:
   type: "WeightedAverageScoring"

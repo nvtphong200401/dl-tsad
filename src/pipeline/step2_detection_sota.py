@@ -6,65 +6,77 @@ from .step2_detection import DetectionMethod
 
 
 class HybridDetection(DetectionMethod):
-    """AER-style: Combine reconstruction + prediction + bidirectional
+    """AER detection: combine reconstruction + bidirectional regression errors.
 
-    Expects input format: [original, recon, pred_f, pred_b]
-    each of shape (N, W*D)
+    Expects input format from AERProcessor: (N, 3)
+        column 0 = reconstruction error
+        column 1 = backward regression error
+        column 2 = forward regression error
+
+    Scoring modes (matching the Orion reference):
+        "mult"  – multiply (both scaled to [1,2])  **default**
+        "sum"   – weighted sum with lambda_rec
+        "rec"   – reconstruction error only
+        "reg"   – regression error only
 
     Args:
-        alpha: Weight between reconstruction and prediction errors (0-1)
-        beta: Weight between forward and backward prediction (0-1)
+        comb:       Combination mode. Default "mult".
+        lambda_rec: Weight for reconstruction in "sum" mode (0–1). Default 0.5.
     """
 
-    def __init__(self, alpha: float = 0.5, beta: float = 0.5):
-        self.alpha = alpha
-        self.beta = beta
+    def __init__(self, comb: str = "mult", lambda_rec: float = 0.5,
+                 # Legacy aliases kept so old configs don't crash
+                 alpha: float = None, beta: float = None):
+        self.comb = comb
+        self.lambda_rec = lambda_rec
 
     def fit(self, X_processed: np.ndarray, y: Optional[np.ndarray] = None):
-        # No training needed for detection step with AER
         pass
 
     def detect(self, X_processed: np.ndarray) -> np.ndarray:
         """Compute hybrid anomaly score
 
         Args:
-            X_processed: Concatenated [original, recon, pred_f, pred_b] (N, 4*W*D)
+            X_processed: (N, 3) — [rec_error, reg_b_error, reg_f_error]
 
         Returns:
             Anomaly scores (N,)
         """
-        # Split input into 4 parts
-        n_samples, total_dim = X_processed.shape
-        chunk_size = total_dim // 4
+        rec_error = X_processed[:, 0]
+        reg_error = (X_processed[:, 1] + X_processed[:, 2]) / 2
 
-        original = X_processed[:, :chunk_size]
-        recon = X_processed[:, chunk_size:2*chunk_size]
-        pred_f = X_processed[:, 2*chunk_size:3*chunk_size]
-        pred_b = X_processed[:, 3*chunk_size:]
-
-        # Reconstruction error
-        recon_error = np.mean((original - recon) ** 2, axis=1)
-
-        # Forward prediction error
-        pred_error_f = np.mean((original - pred_f) ** 2, axis=1)
-
-        # Backward prediction error
-        pred_error_b = np.mean((original - pred_b) ** 2, axis=1)
-
-        # Bidirectional prediction error
-        pred_error = self.beta * pred_error_f + (1 - self.beta) * pred_error_b
-
-        # Combined score
-        scores = self.alpha * recon_error + (1 - self.alpha) * pred_error
+        if self.comb == "mult":
+            rec_s = self._minmax_scale(rec_error, (1, 2))
+            reg_s = self._minmax_scale(reg_error, (1, 2))
+            scores = rec_s * reg_s
+        elif self.comb == "sum":
+            rec_s = self._minmax_scale(rec_error, (0, 1))
+            reg_s = self._minmax_scale(reg_error, (0, 1))
+            scores = self.lambda_rec * rec_s + (1 - self.lambda_rec) * reg_s
+        elif self.comb == "rec":
+            scores = rec_error
+        elif self.comb == "reg":
+            scores = reg_error
+        else:
+            scores = rec_error + reg_error
 
         return scores
 
+    @staticmethod
+    def _minmax_scale(x: np.ndarray, feature_range=(0, 1)) -> np.ndarray:
+        """MinMax scale to the given range (handles constant arrays)."""
+        x_min, x_max = x.min(), x.max()
+        if x_max - x_min < 1e-10:
+            return np.full_like(x, feature_range[0])
+        scaled = (x - x_min) / (x_max - x_min)
+        return scaled * (feature_range[1] - feature_range[0]) + feature_range[0]
+
 
 class AssociationDiscrepancyDetection(DetectionMethod):
-    """Anomaly Transformer detection using association discrepancy
+    """Anomaly Transformer detection using association discrepancy.
 
-    Input is the discrepancy computed by AnomalyTransformerProcessor
-    Shape: (N, W*W)
+    Input is the per-timestep anomaly scores from AnomalyTransformerProcessor.
+    Shape: (N, W) — one score per timestep per window.
     """
 
     def fit(self, X_processed: np.ndarray, y: Optional[np.ndarray] = None):
@@ -72,14 +84,14 @@ class AssociationDiscrepancyDetection(DetectionMethod):
         pass
 
     def detect(self, X_processed: np.ndarray) -> np.ndarray:
-        """Aggregate discrepancy to get anomaly score per window
+        """Aggregate per-timestep anomaly scores to get one score per window.
 
         Args:
-            X_processed: Association discrepancy (N, W*W)
+            X_processed: Per-timestep anomaly scores (N, W)
 
         Returns:
             Anomaly scores (N,)
         """
-        # Compute score as mean discrepancy per window
+        # Mean anomaly score across the window
         scores = np.mean(X_processed, axis=1)
         return scores

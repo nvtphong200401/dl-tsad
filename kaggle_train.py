@@ -151,6 +151,8 @@ def train_model(
         "config": config["data_processing"]["params"],
         "window_size": config["data_processing"]["window_size"],
         "input_dim": pipeline.data_processor.input_dim,
+        "lstm_units": pipeline.data_processor.lstm_units,
+        "num_layers": pipeline.data_processor.num_layers,
         "f1": ev.f1,
         "precision": ev.precision,
         "recall": ev.recall,
@@ -186,7 +188,7 @@ MODELS = [
     {
         "name": "aer",
         "config": "aer_pipeline.yaml",
-        "overrides": {"hidden_dim": 128, "epochs": 50},
+        "overrides": {"lstm_units": 30, "epochs": 35},
     },
     {
         "name": "anomaly_transformer",
