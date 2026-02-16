@@ -5,10 +5,10 @@ Best TSAD - Train SOTA Models on Kaggle
 
 Usage on Kaggle:
     1. Clone repo:     !git clone https://github.com/nvtphong200401/dl-tsad.git
-    2. Run script:     !python dl-tsad/best-tsad/kaggle_train.py --category point
+    2. Run script:     !python dl-tsad/kaggle_train.py --category point
 
     Or train all categories:
-                       !python dl-tsad/best-tsad/kaggle_train.py --all
+                       !python dl-tsad/kaggle_train.py --all
 
 Prerequisites:
     - Upload AnomLLM synthetic data as a Kaggle Dataset
