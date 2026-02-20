@@ -1,0 +1,35 @@
+# Phase 2: Core Implementation Requirements
+
+# Phase 1 requirements (preserved)
+numpy>=1.21.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+pandas>=1.3.0
+pyyaml>=5.4.0
+
+# Phase 2: Foundation Models (Week 1)
+chronos-forecasting>=0.1.0  # Amazon Chronos (probabilistic forecasting)
+# timesfm>=0.1.0  # Google TimesFM (optional, may require special installation)
+torch>=2.0.0  # Required by Chronos
+transformers>=4.30.0  # Required by Chronos
+
+# Phase 2: Statistical Evidence (Week 2)
+statsmodels>=0.13.0  # For ACF, time series analysis
+
+# Phase 2: LLM Integration (Week 3)
+openai>=1.0.0  # GPT-4 API (optional, requires API key)
+google-generativeai>=0.3.0  # Gemini API (optional, requires API key)
+anthropic>=0.8.0  # Claude API (optional, requires API key)
+python-dotenv>=0.19.0  # For .env file loading
+
+# Phase 3: RAG System (Week 5-6)
+chromadb>=0.4.0  # Vector database (optional)
+sentence-transformers>=2.2.0  # Embeddings (optional)
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=3.0.0
+
+# Development
+black>=22.0.0  # Code formatting (optional)
+flake8>=4.0.0  # Linting (optional)

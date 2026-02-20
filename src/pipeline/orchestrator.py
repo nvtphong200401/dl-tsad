@@ -95,6 +95,15 @@ class AnomalyDetectionPipeline:
         X_processed = self.data_processor.process(X_test, fit=False)
         t1 = time.time()
 
+        # Pass forecast context from Step 1 to Step 2 (if applicable)
+        if hasattr(self.detection_method, 'set_forecast_context'):
+            forecasts = getattr(self.data_processor, 'get_forecasts', lambda: None)()
+            train_stats = getattr(self.data_processor, 'get_train_statistics', lambda: None)()
+            self.detection_method.set_forecast_context(
+                forecast_results=forecasts or [],
+                train_statistics=train_stats or {}
+            )
+
         # Step 2: Detection (get sub-sequence scores)
         subsequence_scores = self.detection_method.detect(X_processed)
         t2 = time.time()
@@ -129,10 +138,17 @@ class AnomalyDetectionPipeline:
 
     def _get_metadata(self) -> Dict[str, Any]:
         """Collect metadata from all components"""
-        return {
+        metadata = {
             'data_processor': type(self.data_processor).__name__,
             'detection_method': type(self.detection_method).__name__,
             'scoring_method': type(self.scoring_method).__name__,
             'window_size': self.data_processor.window_config.window_size,
             'stride': self.data_processor.window_config.stride
         }
+        # Include evidence info if available
+        if hasattr(self.detection_method, 'get_evidence'):
+            evidence = self.detection_method.get_evidence()
+            if evidence is not None:
+                metadata['evidence_count'] = len(evidence)
+                metadata['has_evidence'] = True
+        return metadata
