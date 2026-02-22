@@ -9,7 +9,7 @@ pyyaml>=5.4.0
 
 # Phase 2: Foundation Models (Week 1)
 chronos-forecasting>=0.1.0  # Amazon Chronos (probabilistic forecasting)
-timesfm>=0.1.0  # Google TimesFM (optional, may require special installation)
+# timesfm>=0.1.0  # Google TimesFM (optional, may require special installation)
 torch>=2.0.0  # Required by Chronos
 transformers>=4.30.0  # Required by Chronos
 
