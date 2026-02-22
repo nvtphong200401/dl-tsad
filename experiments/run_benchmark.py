@@ -1,21 +1,21 @@
 #!/usr/bin/env python
 """Comprehensive Benchmark: Phase 1 vs Phase 2 on AnomLLM datasets
 
-Runs each config in a separate thread (1 thread per config).
-Within each thread, categories run sequentially.
+Runs each (config, category) pair in a separate thread for maximum parallelism.
+E.g., 4 configs x 4 categories = 16 threads.
 
 Usage:
-    # Run default configs on core 4 categories
+    # Run default configs on core 4 categories (16 threads)
     python experiments/run_benchmark.py
+
+    # Limit threads (e.g., for GPU configs to avoid OOM)
+    python experiments/run_benchmark.py --workers 4
 
     # All 8 categories
     python experiments/run_benchmark.py --all-categories
 
-    # Specific configs
-    python experiments/run_benchmark.py --configs baseline_f1optimal phase2_timesfm
-
     # Sequential (for debugging)
-    python experiments/run_benchmark.py --sequential
+    python experiments/run_benchmark.py --workers 1
 """
 
 import sys
@@ -23,10 +23,10 @@ import os
 import time
 import json
 import argparse
-import threading
 import numpy as np
 import pandas as pd
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -42,92 +42,77 @@ DEFAULT_CONFIGS = [
 
 CORE_CATEGORIES = ['point', 'range', 'trend', 'freq']
 
-# Thread-safe results collection
-_results_lock = threading.Lock()
-_all_results = []
 
-
-def run_config_thread(config_name, categories, data_cache, num_train, project_root):
-    """Run one config across all categories. Runs in its own thread."""
+def run_one_job(config_name, category, data_cache, num_train, project_root):
+    """Run one (config, category) pair. Each call runs in its own thread."""
     evaluator = Evaluator()
     config_path = os.path.join(project_root, f"configs/pipelines/{config_name}.yaml")
+    label = f"{config_name:30s} | {category:10s}"
 
     if not os.path.exists(config_path):
-        print(f"  [{config_name}] Config not found: {config_path}")
-        return
+        return {'error': f"Config not found: {config_path}", 'label': label}
 
-    config = load_config(config_path)
+    if category not in data_cache:
+        return {'error': f"No data for {category}", 'label': label}
 
-    for category in categories:
-        if category not in data_cache:
-            continue
+    train_series, eval_series = data_cache[category]
 
-        train_series, eval_series = data_cache[category]
-        label = f"{config_name:30s} | {category:10s}"
+    try:
+        # Select few-shot training series
+        rng = np.random.RandomState(42)
+        n = min(num_train, len(train_series))
+        train_idx = rng.choice(len(train_series), n, replace=False)
+        X_train = np.vstack([train_series[i][0] for i in train_idx])
 
-        try:
-            # Select few-shot training series
-            np.random.seed(42)
-            n = min(num_train, len(train_series))
-            train_idx = np.random.choice(len(train_series), n, replace=False)
-            X_train = np.vstack([train_series[i][0] for i in train_idx])
+        # Build and fit pipeline (each thread gets its own instance)
+        config = load_config(config_path)
+        pipeline = build_pipeline_from_config(config)
+        pipeline.fit(X_train)
 
-            # Build and fit pipeline
-            pipeline = build_pipeline_from_config(config)
-            pipeline.fit(X_train)
+        # Evaluate per-series
+        all_y_true, all_y_pred, all_scores = [], [], []
+        total_time = 0
+        n_ok = 0
 
-            # Evaluate per-series
-            all_y_true, all_y_pred, all_scores = [], [], []
-            total_time = 0
-            n_ok = 0
-
-            for series, labels in eval_series:
-                try:
-                    t0 = time.time()
-                    result = pipeline.predict(series, labels)
-                    total_time += time.time() - t0
-                    all_y_true.append(labels)
-                    all_y_pred.append(result.predictions)
-                    all_scores.append(result.point_scores)
-                    n_ok += 1
-                except Exception:
-                    continue
-
-            if n_ok == 0:
-                print(f"  {label} | FAILED: all {len(eval_series)} series failed")
+        for series, labels in eval_series:
+            try:
+                t0 = time.time()
+                result = pipeline.predict(series, labels)
+                total_time += time.time() - t0
+                all_y_true.append(labels)
+                all_y_pred.append(result.predictions)
+                all_scores.append(result.point_scores)
+                n_ok += 1
+            except Exception:
                 continue
 
-            y_true = np.concatenate(all_y_true)
-            y_pred = np.concatenate(all_y_pred)
-            scores = np.concatenate(all_scores)
-            ev = evaluator.evaluate(y_true=y_true, y_pred=y_pred, scores=scores)
+        if n_ok == 0:
+            return {'error': f"All {len(eval_series)} series failed", 'label': label}
 
-            row = {
-                'config': config_name,
-                'category': category,
-                'f1': ev.f1,
-                'precision': ev.precision,
-                'recall': ev.recall,
-                'pa_f1': ev.pa_f1,
-                'detected': int(y_pred.sum()),
-                'total_anomalies': int(y_true.sum()),
-                'n_series': n_ok,
-                'total_points': len(y_true),
-                'num_train_series': n,
-                'time_s': total_time,
-            }
+        y_true = np.concatenate(all_y_true)
+        y_pred = np.concatenate(all_y_pred)
+        scores = np.concatenate(all_scores)
+        ev = evaluator.evaluate(y_true=y_true, y_pred=y_pred, scores=scores)
 
-            with _results_lock:
-                _all_results.append(row)
+        return {
+            'config': config_name,
+            'category': category,
+            'f1': ev.f1,
+            'precision': ev.precision,
+            'recall': ev.recall,
+            'pa_f1': ev.pa_f1,
+            'detected': int(y_pred.sum()),
+            'total_anomalies': int(y_true.sum()),
+            'n_series': n_ok,
+            'total_points': len(y_true),
+            'num_train_series': n,
+            'time_s': total_time,
+            'label': label,
+        }
 
-            print(f"  {label} | F1={ev.f1:.3f}  PA-F1={ev.pa_f1:.3f}  "
-                  f"P={ev.precision:.3f}  R={ev.recall:.3f}  "
-                  f"({total_time:.0f}s, {n_ok}/{len(eval_series)} series)")
-
-        except Exception as e:
-            import traceback
-            print(f"  {label} | FAILED: {e}")
-            traceback.print_exc()
+    except Exception as e:
+        import traceback
+        return {'error': traceback.format_exc(), 'label': label}
 
 
 def main():
@@ -136,13 +121,16 @@ def main():
     parser.add_argument('--categories', nargs='+', default=CORE_CATEGORIES)
     parser.add_argument('--all-categories', action='store_true')
     parser.add_argument('--num-train', type=int, default=5, help='Training series (few-shot)')
-    parser.add_argument('--sequential', action='store_true', help='Run sequentially (no threads)')
+    parser.add_argument('--workers', type=int, default=None,
+                        help='Max parallel threads (default: all jobs)')
     parser.add_argument('--data-path', default='src/data/synthetic')
     parser.add_argument('--output', default='src/results/synthetic')
     args = parser.parse_args()
 
     categories = get_all_categories() if args.all_categories else args.categories
     configs = args.configs
+    n_jobs = len(configs) * len(categories)
+    max_workers = args.workers or n_jobs
 
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     os.chdir(project_root)
@@ -153,11 +141,12 @@ def main():
     print("=" * 70)
     print(f"Configs:      {configs}")
     print(f"Categories:   {categories}")
-    print(f"Parallel:     {'no (sequential)' if args.sequential else f'{len(configs)} threads (1 per config)'}")
+    print(f"Jobs:         {n_jobs} ({len(configs)} configs x {len(categories)} categories)")
+    print(f"Threads:      {max_workers}")
     print(f"Train:        {args.num_train} series (few-shot)")
     print(f"Project root: {project_root}")
 
-    # Load all datasets upfront (shared across threads, read-only)
+    # Load all datasets upfront (shared read-only across threads)
     print(f"\nLoading datasets...")
     data_cache = {}
     for cat in categories:
@@ -175,41 +164,48 @@ def main():
         print("\nNo datasets loaded!")
         return 1
 
-    # Run benchmarks
+    # Build all jobs
+    jobs = [(cfg, cat) for cfg in configs for cat in categories if cat in data_cache]
+
     print(f"\n{'='*70}")
-    print(f"Running {len(configs)} configs x {len(categories)} categories...")
+    print(f"Running {len(jobs)} jobs with {max_workers} threads...")
     print("-" * 70)
 
-    global _all_results
-    _all_results = []
+    os.makedirs(args.output, exist_ok=True)
+    all_results = []
     t_start = time.time()
 
-    os.makedirs(args.output, exist_ok=True)
-
-    if args.sequential:
-        for cfg in configs:
-            run_config_thread(cfg, categories, data_cache, args.num_train, project_root)
-    else:
-        threads = []
-        for cfg in configs:
-            t = threading.Thread(
-                target=run_config_thread,
-                args=(cfg, categories, data_cache, args.num_train, project_root)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for cfg, cat in jobs:
+            future = executor.submit(
+                run_one_job, cfg, cat, data_cache, args.num_train, project_root
             )
-            threads.append(t)
-            t.start()
+            futures[future] = (cfg, cat)
 
-        for t in threads:
-            t.join()
+        for future in as_completed(futures):
+            result = future.result()
+            label = result.get('label', '?')
+            if 'error' in result:
+                err = result['error']
+                # Truncate long tracebacks for display
+                if len(err) > 200:
+                    err = err[:200] + "..."
+                print(f"  {label} | FAILED: {err}")
+            else:
+                all_results.append(result)
+                print(f"  {label} | F1={result['f1']:.3f}  PA-F1={result['pa_f1']:.3f}  "
+                      f"P={result['precision']:.3f}  R={result['recall']:.3f}  "
+                      f"({result['time_s']:.0f}s, {result['n_series']}/{len(data_cache[result['category']][1])} series)")
 
     wall_time = time.time() - t_start
     print(f"\nWall time: {wall_time:.0f}s")
 
-    if not _all_results:
+    if not all_results:
         print("\nNo results!")
         return 1
 
-    df = pd.DataFrame(_all_results)
+    df = pd.DataFrame(all_results)
 
     # F1 comparison
     print(f"\n{'='*70}")
@@ -248,6 +244,7 @@ def main():
         'configs': configs,
         'categories': categories,
         'num_train_series': args.num_train,
+        'workers': max_workers,
         'per_config': {
             cfg: {
                 'avg_f1': float(df[df['config'] == cfg]['f1'].mean()),
