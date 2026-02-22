@@ -16,7 +16,7 @@ class EnsembleForecaster:
     def __init__(
         self,
         models: List[str] = ['chronos'],  # Default to Chronos only (more reliable)
-        timesfm_model: str = "google/timesfm-1.0-200m",
+        timesfm_model: str = "google/timesfm-2.0-500m-pytorch",
         chronos_model: str = "amazon/chronos-t5-small"
     ):
         """Initialize ensemble forecaster

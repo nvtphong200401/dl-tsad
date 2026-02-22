@@ -1,0 +1,21 @@
+{
+  "timestamp": "20260222_164757",
+  "configs": [
+    "baseline_f1optimal",
+    "phase2_evidence_fast"
+  ],
+  "categories": [
+    "point"
+  ],
+  "num_train_series": 5,
+  "per_config": {
+    "baseline_f1optimal": {
+      "avg_f1": 0.13643669763072747,
+      "avg_pa_f1": 0.5131459655485042
+    },
+    "phase2_evidence_fast": {
+      "avg_f1": 0.10684515509280779,
+      "avg_pa_f1": 0.683453237410072
+    }
+  }
+}

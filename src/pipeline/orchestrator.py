@@ -108,6 +108,12 @@ class AnomalyDetectionPipeline:
         subsequence_scores = self.detection_method.detect(X_processed)
         t2 = time.time()
 
+        # Pass evidence context from Step 2 to Step 3 (if applicable)
+        if hasattr(self.scoring_method, 'set_evidence_context'):
+            evidence = getattr(self.detection_method, 'get_evidence', lambda: None)()
+            if evidence is not None:
+                self.scoring_method.set_evidence_context(evidence, X_processed)
+
         # Step 3: Scoring (sub-sequence → point-wise)
         point_scores = self.scoring_method.score(
             subsequence_scores,

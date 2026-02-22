@@ -1,4 +1,8 @@
-"""TimesFM (Google) Foundation Model Wrapper"""
+"""TimesFM (Google) Foundation Model Wrapper
+
+Supports TimesFM 2.0/2.5 with PyTorch backend.
+Install: pip install timesfm[torch]  (or clone from github for 2.5)
+"""
 
 import numpy as np
 from typing import Dict, Optional
@@ -8,33 +12,42 @@ from .base import FoundationModel
 class TimesFMWrapper(FoundationModel):
     """Wrapper for Google's TimesFM foundation model
 
-    TimesFM is a decoder-only transformer (200M-1.6B params) pre-trained
-    on 100B+ time points from Google datasets.
+    TimesFM is a decoder-only transformer pre-trained on 100B+ time points.
+    Returns both point forecasts and quantile predictions.
 
     Paper: Das et al., "A decoder-only foundation model for time-series
     forecasting", ICML 2024
     """
 
-    def __init__(self, model_name: str = "google/timesfm-1.0-200m"):
+    def __init__(self, model_name: str = "google/timesfm-2.0-500m-pytorch"):
         """Initialize TimesFM wrapper
 
         Args:
             model_name: HuggingFace model identifier
-                - "google/timesfm-1.0-200m" (default, fastest)
-                - "google/timesfm-1.0-1.6b" (larger, better quality)
+                - "google/timesfm-2.0-500m-pytorch" (default, PyTorch)
+                - "google/timesfm-2.5-200m-pytorch" (latest, needs github install)
         """
         self.model_name = model_name
         self.model = None
 
     def load_model(self):
-        """Load pre-trained TimesFM model"""
+        """Load pre-trained TimesFM model with PyTorch backend"""
         try:
             import timesfm
-            self.model = timesfm.TimesFM.from_pretrained(self.model_name)
+
+            # Try 2.5 first, fall back to 2.0
+            if '2.5' in self.model_name:
+                self.model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+                    self.model_name
+                )
+            else:
+                self.model = timesfm.TimesFM_2_500M_torch.from_pretrained(
+                    self.model_name
+                )
             print(f"Loaded TimesFM model: {self.model_name}")
         except ImportError:
             raise ImportError(
-                "TimesFM not installed. Install with: pip install timesfm"
+                "TimesFM not installed. Install with: pip install timesfm[torch]"
             )
         except Exception as e:
             raise RuntimeError(f"Failed to load TimesFM model: {e}")
@@ -43,59 +56,59 @@ class TimesFMWrapper(FoundationModel):
         self,
         context: np.ndarray,
         horizon: int,
-        context_length: Optional[int] = None,
         **kwargs
     ) -> Dict[str, np.ndarray]:
-        """Generate zero-shot forecast
+        """Generate zero-shot forecast with quantiles
 
         Args:
             context: Historical data (T,) or (T, D)
             horizon: Number of steps to forecast
-            context_length: Length of context to use (default: use all)
-            **kwargs: Additional TimesFM parameters
+            **kwargs: Additional parameters
 
         Returns:
-            Dictionary with 'forecast' and 'model' keys
+            Dictionary with:
+                - 'forecast': Point forecast (H,)
+                - 'quantiles': Dict of quantile arrays
+                - 'model': 'timesfm'
         """
         if not self.is_loaded():
             self.load_model()
 
-        # Ensure correct shape
-        if context.ndim == 1:
-            context = context.reshape(1, -1)  # (1, T)
-        elif context.ndim == 2:
-            # If multivariate (T, D), need to forecast each dimension
-            # For now, average across dimensions (TODO: improve)
+        # Ensure 1D input
+        if context.ndim == 2:
             if context.shape[1] > 1:
-                print(f"Warning: TimesFM expects univariate. Averaging {context.shape[1]} dimensions.")
-                context = context.mean(axis=1, keepdims=True).T  # (1, T)
+                context = context.mean(axis=1)
             else:
-                context = context.T  # (D, T) → transpose for batch format
+                context = context.squeeze()
 
-        # Set context length
-        if context_length is None:
-            context_length = context.shape[1]
-
-        # Generate forecast
+        # TimesFM accepts list of arrays
         try:
-            forecast = self.model.forecast(
-                time_series=context,
+            point_forecast, quantile_forecast = self.model.forecast(
                 horizon=horizon,
-                context_length=context_length,
-                **kwargs
+                inputs=[context.astype(np.float32)],
             )
 
-            # Ensure output is 1D array
-            if isinstance(forecast, np.ndarray):
-                forecast = forecast.squeeze()
-            else:
-                # Convert to numpy if needed
-                forecast = np.array(forecast).squeeze()
+            # point_forecast: (1, H), quantile_forecast: (1, H, Q)
+            point = point_forecast[0]  # (H,)
+
+            # Build quantiles dict from quantile_forecast
+            quantiles = {}
+            if quantile_forecast is not None and len(quantile_forecast.shape) == 3:
+                q_data = quantile_forecast[0]  # (H, Q)
+                n_quantiles = q_data.shape[1]
+                # TimesFM returns mean + 10th to 90th percentiles
+                if n_quantiles >= 5:
+                    quantiles['P10'] = q_data[:, 1] if n_quantiles > 1 else point
+                    quantiles['P50'] = point
+                    quantiles['P90'] = q_data[:, -2] if n_quantiles > 1 else point
 
             return {
-                'forecast': forecast,  # Shape: (horizon,)
+                'forecast': point,
+                'quantiles': quantiles if quantiles else None,
                 'model': 'timesfm',
-                'model_name': self.model_name
+                'model_name': self.model_name,
+                'uncertainty': (quantiles.get('P90', point) - quantiles.get('P10', point))
+                               if quantiles else np.zeros_like(point)
             }
 
         except Exception as e:

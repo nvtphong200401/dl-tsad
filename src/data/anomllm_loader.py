@@ -107,6 +107,40 @@ def load_anomllm_category(category: str, base_path: str = "src/data/synthetic") 
     )
 
 
+def load_anomllm_series(category: str, split: str = "eval",
+                        base_path: str = "src/data/synthetic") -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Load AnomLLM dataset as individual series (not concatenated).
+
+    This matches AnomLLM's per-series evaluation approach.
+
+    Args:
+        category: Category name (e.g., 'point', 'trend')
+        split: 'train' or 'eval'
+        base_path: Base path to synthetic data
+
+    Returns:
+        List of (series, labels) tuples where:
+            series: np.ndarray (T, D) — time series
+            labels: np.ndarray (T,) — binary labels
+    """
+    import os
+
+    data_path = os.path.join(base_path, category, split, "data.pkl")
+    with open(data_path, 'rb') as f:
+        data = pickle.load(f)
+
+    result = []
+    for series, anom_segments in zip(data['series'], data['anom']):
+        T = len(series)
+        labels = np.zeros(T, dtype=int)
+        for segment_list in anom_segments:
+            for start, end in segment_list:
+                labels[start:end] = 1
+        result.append((series, labels))
+
+    return result
+
+
 def get_all_categories() -> List[str]:
     """Get list of all available AnomLLM categories"""
     return [

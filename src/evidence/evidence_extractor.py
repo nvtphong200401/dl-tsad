@@ -62,7 +62,8 @@ class StatisticalEvidenceExtractor:
         test_window: np.ndarray,
         forecast_result: Optional[Dict] = None,
         train_statistics: Optional[Dict] = None,
-        train_data: Optional[np.ndarray] = None
+        train_data: Optional[np.ndarray] = None,
+        actual_future: Optional[np.ndarray] = None
     ) -> Dict:
         """Extract all enabled evidence metrics for a single window.
 
@@ -74,6 +75,8 @@ class StatisticalEvidenceExtractor:
                 'mean', 'std', 'quantiles', 'min', 'max'
             train_data: Representative training data for distribution
                 comparison (M,)
+            actual_future: Actual future values to compare against forecast.
+                If provided, used instead of test_window for forecast comparison.
 
         Returns:
             Dict with all computed evidence metrics.
@@ -84,12 +87,14 @@ class StatisticalEvidenceExtractor:
         window_1d = test_window.squeeze() if test_window.ndim > 1 else test_window
 
         # Category 1: Forecast-based
+        # Use actual_future (real future values) if available, otherwise fall back to window
         if 'forecast_based' in self.extractors and forecast_result is not None:
             forecast = forecast_result.get('forecast')
             if forecast is not None:
+                actual = actual_future if actual_future is not None else window_1d
                 try:
                     fb = self.extractors['forecast_based'].extract(
-                        actual=window_1d,
+                        actual=actual,
                         forecast=forecast,
                         quantiles=forecast_result.get('quantiles'),
                         samples=forecast_result.get('samples')

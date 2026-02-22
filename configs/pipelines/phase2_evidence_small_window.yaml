@@ -1,0 +1,25 @@
+experiment:
+  name: "phase2_evidence_w30"
+  description: "Phase 2 evidence-based with smaller window (better for short anomalies)"
+
+data_processing:
+  type: "RawWindowProcessor"
+  window_size: 30
+  stride: 1
+
+detection:
+  type: "EvidenceBasedDetection"
+  params:
+    enabled_categories:
+      - statistical_tests
+      - distribution_based
+      - pattern_based
+
+scoring:
+  type: "MaxPoolingScoring"
+
+postprocessing:
+  threshold:
+    type: "F1OptimalThreshold"
+  min_anomaly_length: 3
+  merge_gap: 5

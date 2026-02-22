@@ -1,0 +1,24 @@
+{
+  "timestamp": "20260222_005010",
+  "configs": [
+    "baseline_f1optimal",
+    "phase2_evidence_fast"
+  ],
+  "categories": [
+    "point"
+  ],
+  "results_per_config": {
+    "baseline_f1optimal": {
+      "avg_f1": 0.4857546307832876,
+      "avg_pa_f1": 0.27692307692307694,
+      "avg_precision": 0.5016297821238634,
+      "avg_recall": 0.47085346215781
+    },
+    "phase2_evidence_fast": {
+      "avg_f1": 0.3427113010446344,
+      "avg_pa_f1": 0.41696113074204944,
+      "avg_precision": 0.2713855987967663,
+      "avg_recall": 0.46489533011272144
+    }
+  }
+}

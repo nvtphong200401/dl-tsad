@@ -15,65 +15,50 @@ from ..pipeline import (
     AnomalyDetectionPipeline
 )
 
-# SOTA components
-from ..pipeline.step1_data_processing_sota import (
-    AERProcessor,
-    AnomalyTransformerProcessor
-)
-from ..pipeline.step2_detection_sota import (
-    HybridDetection,
-    AssociationDiscrepancyDetection
-)
-from ..pipeline.step3_scoring_sota import (
-    WeightedAverageScoring,
-    GaussianSmoothingScoring
-)
+# Phase 2 components
+from ..pipeline.step1_foundation_model_processor import FoundationModelProcessor
+from ..pipeline.step2_detection import EvidenceBasedDetection
+from ..pipeline.step3_scoring import LLMReasoningScoring
+
+# SOTA components (may not be available if archived)
+try:
+    from ..pipeline.step1_data_processing_sota import (
+        AERProcessor,
+        AnomalyTransformerProcessor
+    )
+    from ..pipeline.step2_detection_sota import (
+        HybridDetection,
+        AssociationDiscrepancyDetection
+    )
+    from ..pipeline.step3_scoring_sota import (
+        WeightedAverageScoring,
+        GaussianSmoothingScoring
+    )
+    _SOTA_AVAILABLE = True
+except ImportError:
+    _SOTA_AVAILABLE = False
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
-    """Load YAML config file
-
-    Args:
-        config_path: Path to YAML config file
-
-    Returns:
-        Config dictionary
-    """
+    """Load YAML config file"""
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
 
 
 def build_pipeline_from_config(config: Dict[str, Any]) -> AnomalyDetectionPipeline:
-    """Factory function to build pipeline from config dict
-
-    Args:
-        config: Configuration dictionary
-
-    Returns:
-        Configured AnomalyDetectionPipeline
-    """
-    # Step 1: Build data processor
+    """Factory function to build pipeline from config dict"""
     data_processor = _build_data_processor(config['data_processing'])
-
-    # Step 2: Build detection method
     detection_method = _build_detection_method(config['detection'])
-
-    # Step 3: Build scoring method
     scoring_method = _build_scoring_method(config['scoring'])
-
-    # Step 4: Build post-processor
     post_processor = _build_post_processor(config['postprocessing'])
 
-    # Create pipeline
-    pipeline = AnomalyDetectionPipeline(
+    return AnomalyDetectionPipeline(
         data_processor=data_processor,
         detection_method=detection_method,
         scoring_method=scoring_method,
         post_processor=post_processor
     )
-
-    return pipeline
 
 
 def _build_data_processor(config: Dict[str, Any]):
@@ -87,9 +72,18 @@ def _build_data_processor(config: Dict[str, Any]):
 
     if processor_type == 'RawWindowProcessor':
         return RawWindowProcessor(window_config)
-    elif processor_type == 'AERProcessor':
+    elif processor_type == 'FoundationModelProcessor':
+        return FoundationModelProcessor(
+            window_config=window_config,
+            forecast_horizon=params.get('forecast_horizon', 64),
+            models=params.get('models', ['chronos']),
+            chronos_model=params.get('chronos_model', 'amazon/chronos-t5-tiny'),
+            num_samples=params.get('num_samples', 20),
+            ensemble_strategy=params.get('ensemble_strategy', 'average'),
+        )
+    elif processor_type == 'AERProcessor' and _SOTA_AVAILABLE:
         return AERProcessor(window_config, **params)
-    elif processor_type == 'AnomalyTransformerProcessor':
+    elif processor_type == 'AnomalyTransformerProcessor' and _SOTA_AVAILABLE:
         return AnomalyTransformerProcessor(window_config, **params)
     else:
         raise ValueError(f"Unknown data processor type: {processor_type}")
@@ -104,9 +98,14 @@ def _build_detection_method(config: Dict[str, Any]):
         k = params.get('k', 5)
         method = params.get('method', 'knn')
         return DistanceBasedDetection(k=k, method=method)
-    elif detection_type == 'HybridDetection':
+    elif detection_type == 'EvidenceBasedDetection':
+        return EvidenceBasedDetection(
+            enabled_categories=params.get('enabled_categories'),
+            weights=params.get('weights'),
+        )
+    elif detection_type == 'HybridDetection' and _SOTA_AVAILABLE:
         return HybridDetection(**params)
-    elif detection_type == 'AssociationDiscrepancyDetection':
+    elif detection_type == 'AssociationDiscrepancyDetection' and _SOTA_AVAILABLE:
         return AssociationDiscrepancyDetection()
     else:
         raise ValueError(f"Unknown detection type: {detection_type}")
@@ -121,9 +120,15 @@ def _build_scoring_method(config: Dict[str, Any]):
         return MaxPoolingScoring()
     elif scoring_type == 'AveragePoolingScoring':
         return AveragePoolingScoring()
-    elif scoring_type == 'WeightedAverageScoring':
+    elif scoring_type == 'LLMReasoningScoring':
+        return LLMReasoningScoring(
+            backend_type=params.get('backend_type', 'azure_openai'),
+            batch_size=params.get('batch_size', 10),
+            temperature=params.get('temperature', 0.0),
+        )
+    elif scoring_type == 'WeightedAverageScoring' and _SOTA_AVAILABLE:
         return WeightedAverageScoring()
-    elif scoring_type == 'GaussianSmoothingScoring':
+    elif scoring_type == 'GaussianSmoothingScoring' and _SOTA_AVAILABLE:
         return GaussianSmoothingScoring(**params)
     else:
         raise ValueError(f"Unknown scoring type: {scoring_type}")
@@ -135,7 +140,6 @@ def _build_post_processor(config: Dict[str, Any]):
     threshold_type = threshold_config['type']
     threshold_params = threshold_config.get('params', {})
 
-    # Build threshold method
     if threshold_type == 'PercentileThreshold':
         percentile = threshold_params.get('percentile', 95.0)
         threshold_method = PercentileThreshold(percentile=percentile)
@@ -144,7 +148,6 @@ def _build_post_processor(config: Dict[str, Any]):
     else:
         raise ValueError(f"Unknown threshold type: {threshold_type}")
 
-    # Build post-processor
     min_anomaly_length = config.get('min_anomaly_length', 1)
     merge_gap = config.get('merge_gap', 0)
 

@@ -241,16 +241,35 @@ class EvidenceBasedDetection(DetectionMethod):
             window = X_processed[i, :, 0]
 
             # Get forecast for this window (if available)
+            # Fix: align forecast with actual future values, not the context window.
+            # Window i covers positions [i, i+W-1]. The forecast predicts positions
+            # [i+W, i+W+H-1]. With stride=1, window i+W starts at position i+W,
+            # so X_processed[i+W, :, 0] gives actual values at [i+W, i+2W-1].
             forecast_result = None
             if self.forecast_results is not None and i < len(self.forecast_results):
-                forecast_result = self.forecast_results[i]
+                fr = self.forecast_results[i]
+                if fr.get('forecast') is not None and (i + W) < N:
+                    H = len(fr['forecast'])
+                    # Get actual future values from subsequent windows
+                    actual_future = X_processed[i + W, :min(H, W), 0]
+                    forecast_result = {
+                        **fr,
+                        '_actual_future': actual_future,
+                    }
+                else:
+                    forecast_result = fr
 
-            # Extract evidence
+            # Extract evidence — pass actual future for forecast comparison
+            actual_for_forecast = None
+            if forecast_result is not None and '_actual_future' in forecast_result:
+                actual_for_forecast = forecast_result.pop('_actual_future')
+
             evidence = self.extractor.extract(
                 test_window=window,
                 forecast_result=forecast_result,
                 train_statistics=train_stats,
-                train_data=self.train_data_sample
+                train_data=self.train_data_sample,
+                actual_future=actual_for_forecast
             )
 
             evidence['window_index'] = i
