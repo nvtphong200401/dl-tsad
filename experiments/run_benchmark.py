@@ -40,30 +40,38 @@ DEFAULT_CONFIGS = [
 CORE_CATEGORIES = ['point', 'range', 'trend', 'freq']
 
 
-def run_one_job(config_name, category, base_path, num_train):
+def run_one_job(config_name, category, base_path, num_train, project_root):
     """Run one (config, category) pair. Designed to run in a subprocess.
 
     All imports happen inside so each process is self-contained.
     Returns dict with results or None on failure.
     """
-    import sys, os, time
+    import sys, os, time, traceback
     import numpy as np
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-    from src.utils.config_factory import load_config, build_pipeline_from_config
-    from src.data.anomllm_loader import load_anomllm_series
-    from src.evaluation.evaluator import Evaluator
+    # Use absolute project_root passed from parent (not __file__ which may fail in subprocess)
+    sys.path.insert(0, project_root)
+    os.chdir(project_root)
 
-    config_path = f"configs/pipelines/{config_name}.yaml"
+    try:
+        from src.utils.config_factory import load_config, build_pipeline_from_config
+        from src.data.anomllm_loader import load_anomllm_series
+        from src.evaluation.evaluator import Evaluator
+    except Exception as e:
+        return {'error': f"Import failed: {traceback.format_exc()}", 'config': config_name, 'category': category}
+
+    config_path = os.path.join(project_root, f"configs/pipelines/{config_name}.yaml")
     if not os.path.exists(config_path):
-        return None
+        return {'error': f"Config not found: {config_path}", 'config': config_name, 'category': category}
+
+    data_path = os.path.join(project_root, base_path)
 
     # Load data
     try:
-        train_series = load_anomllm_series(category, split='train', base_path=base_path)
-        eval_series = load_anomllm_series(category, split='eval', base_path=base_path)
+        train_series = load_anomllm_series(category, split='train', base_path=data_path)
+        eval_series = load_anomllm_series(category, split='eval', base_path=data_path)
     except Exception as e:
-        return {'error': f"Data load failed: {e}", 'config': config_name, 'category': category}
+        return {'error': f"Data load failed: {traceback.format_exc()}", 'config': config_name, 'category': category}
 
     # Select few-shot training series
     np.random.seed(42)
@@ -77,13 +85,14 @@ def run_one_job(config_name, category, base_path, num_train):
         pipeline = build_pipeline_from_config(config)
         pipeline.fit(X_train)
     except Exception as e:
-        return {'error': f"Fit failed: {e}", 'config': config_name, 'category': category}
+        return {'error': f"Fit failed: {traceback.format_exc()}", 'config': config_name, 'category': category}
 
     # Evaluate per-series
     evaluator = Evaluator()
     all_y_true, all_y_pred, all_scores = [], [], []
     total_time = 0
     n_ok = 0
+    first_error = None
 
     for series, labels in eval_series:
         try:
@@ -94,11 +103,13 @@ def run_one_job(config_name, category, base_path, num_train):
             all_y_pred.append(result.predictions)
             all_scores.append(result.point_scores)
             n_ok += 1
-        except Exception:
+        except Exception as e:
+            if first_error is None:
+                first_error = traceback.format_exc()
             continue
 
     if n_ok == 0:
-        return {'error': 'All series failed', 'config': config_name, 'category': category}
+        return {'error': f'All series failed. First error: {first_error}', 'config': config_name, 'category': category}
 
     y_true = np.concatenate(all_y_true)
     y_pred = np.concatenate(all_y_pred)
@@ -145,6 +156,10 @@ def main():
     print(f"Workers:    {max_workers}")
     print(f"Train:      {args.num_train} series (few-shot)")
 
+    # Resolve project root as absolute path (critical for subprocesses)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    print(f"Project root: {project_root}")
+
     os.makedirs(args.output, exist_ok=True)
 
     # Build all jobs: (config, category) pairs
@@ -161,7 +176,7 @@ def main():
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {}
         for cfg, cat in jobs:
-            future = executor.submit(run_one_job, cfg, cat, args.data_path, args.num_train)
+            future = executor.submit(run_one_job, cfg, cat, args.data_path, args.num_train, project_root)
             futures[future] = (cfg, cat)
 
         for future in as_completed(futures):
