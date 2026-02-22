@@ -1,14 +1,15 @@
 experiment:
   name: "phase2_llm_reasoning"
-  description: "Foundation model forecasts + evidence extraction + LLM reasoning scoring"
+  description: "TimesFM + Chronos ensemble + evidence extraction + LLM reasoning"
 
 data_processing:
   type: "FoundationModelProcessor"
-  window_size: 30
+  window_size: 100
   stride: 1
   params:
-    forecast_horizon: 30
-    models: ['chronos']
+    forecast_horizon: 64
+    models: ['timesfm', 'chronos']
+    timesfm_model: "google/timesfm-2.0-500m-pytorch"
     chronos_model: "amazon/chronos-t5-tiny"
     num_samples: 20
     ensemble_strategy: "average"
@@ -17,6 +18,7 @@ detection:
   type: "EvidenceBasedDetection"
   params:
     enabled_categories:
+      - forecast_based
       - statistical_tests
       - distribution_based
       - pattern_based
@@ -30,8 +32,6 @@ scoring:
 
 postprocessing:
   threshold:
-    type: "PercentileThreshold"
-    params:
-      percentile: 90.0
+    type: "F1OptimalThreshold"
   min_anomaly_length: 3
   merge_gap: 5
