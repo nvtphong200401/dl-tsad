@@ -56,6 +56,17 @@ class TimesFMWrapper(FoundationModel):
             ))
             self._compiled_horizon = horizon
 
+    @staticmethod
+    def _pad_to_patch(arr, patch_size=32):
+        """Pad array length to nearest multiple of patch_size."""
+        n = len(arr)
+        remainder = n % patch_size
+        if remainder == 0:
+            return arr
+        pad_len = patch_size - remainder
+        # Pad with the mean value (less disruptive than zeros)
+        return np.pad(arr, (pad_len, 0), mode='edge')
+
     def forecast(
         self,
         context: np.ndarray,
@@ -85,12 +96,13 @@ class TimesFMWrapper(FoundationModel):
             else:
                 context = context.squeeze()
 
-        # TimesFM accepts list of arrays
+        # TimesFM accepts list of arrays (context must be multiple of 32 for patching)
         try:
+            context_padded = self._pad_to_patch(context.astype(np.float32))
             self._ensure_compiled(horizon)
             point_forecast, quantile_forecast = self.model.forecast(
                 horizon=horizon,
-                inputs=[context.astype(np.float32)],
+                inputs=[context_padded],
             )
 
             # point_forecast: (1, H), quantile_forecast: (1, H, Q)
@@ -129,7 +141,7 @@ class TimesFMWrapper(FoundationModel):
         if not self.is_loaded():
             self.load_model()
 
-        inputs = [c.astype(np.float32).flatten() for c in contexts]
+        inputs = [self._pad_to_patch(c.astype(np.float32).flatten()) for c in contexts]
         self._ensure_compiled(horizon)
         point_forecasts, quantile_forecasts = self.model.forecast(
             horizon=horizon,
