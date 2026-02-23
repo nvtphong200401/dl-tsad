@@ -9,7 +9,7 @@ data_processing:
   params:
     forecast_horizon: 64
     models: ['timesfm', 'chronos']
-    timesfm_model: "google/timesfm-2.0-500m-pytorch"
+    timesfm_model: "google/timesfm-2.5-200m-pytorch"
     chronos_model: "amazon/chronos-t5-tiny"
     num_samples: 20
     ensemble_strategy: "average"

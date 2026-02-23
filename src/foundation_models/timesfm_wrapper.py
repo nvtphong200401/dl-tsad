@@ -19,13 +19,12 @@ class TimesFMWrapper(FoundationModel):
     forecasting", ICML 2024
     """
 
-    def __init__(self, model_name: str = "google/timesfm-2.0-500m-pytorch"):
+    def __init__(self, model_name: str = "google/timesfm-2.5-200m-pytorch"):
         """Initialize TimesFM wrapper
 
         Args:
             model_name: HuggingFace model identifier
-                - "google/timesfm-2.0-500m-pytorch" (default, PyTorch)
-                - "google/timesfm-2.5-200m-pytorch" (latest, needs github install)
+                - "google/timesfm-2.5-200m-pytorch" (default, install from github)
         """
         self.model_name = model_name
         self.model = None
@@ -35,19 +34,14 @@ class TimesFMWrapper(FoundationModel):
         try:
             import timesfm
 
-            # Try 2.5 first, fall back to 2.0
-            if '2.5' in self.model_name:
-                self.model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
-                    self.model_name
-                )
-            else:
-                self.model = timesfm.TimesFM_2_500M_torch.from_pretrained(
-                    self.model_name
-                )
+            self.model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+                self.model_name
+            )
             print(f"Loaded TimesFM model: {self.model_name}")
         except ImportError:
             raise ImportError(
-                "TimesFM not installed. Install with: pip install timesfm[torch]"
+                "TimesFM not installed. Install with: "
+                "pip install git+https://github.com/google-research/timesfm.git"
             )
         except Exception as e:
             raise RuntimeError(f"Failed to load TimesFM model: {e}")
