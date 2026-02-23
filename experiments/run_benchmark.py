@@ -168,39 +168,57 @@ def main():
         print("\nNo datasets loaded!")
         return 1
 
-    # Build all jobs
-    jobs = [(cfg, cat) for cfg in configs for cat in categories if cat in data_cache]
+    # Split jobs into CPU-only (safe to parallelize) and GPU (must run sequentially)
+    GPU_CONFIGS = {'phase2_timesfm', 'phase2_ensemble', 'phase2_llm', 'phase2_evidence_all', 'phase2_evidence'}
+    cpu_jobs = [(cfg, cat) for cfg in configs for cat in categories
+                if cat in data_cache and cfg not in GPU_CONFIGS]
+    gpu_jobs = [(cfg, cat) for cfg in configs for cat in categories
+                if cat in data_cache and cfg in GPU_CONFIGS]
 
+    all_jobs_count = len(cpu_jobs) + len(gpu_jobs)
     print(f"\n{'='*70}")
-    print(f"Running {len(jobs)} jobs with {max_workers} threads...")
+    print(f"Total jobs: {all_jobs_count} ({len(cpu_jobs)} CPU-parallel + {len(gpu_jobs)} GPU-sequential)")
     print("-" * 70)
 
     os.makedirs(args.output, exist_ok=True)
     all_results = []
     t_start = time.time()
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {}
-        for cfg, cat in jobs:
-            future = executor.submit(
-                run_one_job, cfg, cat, data_cache, args.num_train, project_root
-            )
-            futures[future] = (cfg, cat)
+    def collect_result(result):
+        label = result.get('label', '?')
+        if 'error' in result:
+            err = result['error']
+            if len(err) > 200:
+                err = err[:200] + "..."
+            print(f"  {label} | FAILED: {err}")
+        else:
+            all_results.append(result)
+            cat = result['category']
+            n_eval = len(data_cache[cat][1]) if cat in data_cache else '?'
+            print(f"  {label} | F1={result['f1']:.3f}  PA-F1={result['pa_f1']:.3f}  "
+                  f"P={result['precision']:.3f}  R={result['recall']:.3f}  "
+                  f"({result['time_s']:.0f}s, {result['n_series']}/{n_eval} series)")
 
-        for future in as_completed(futures):
-            result = future.result()
-            label = result.get('label', '?')
-            if 'error' in result:
-                err = result['error']
-                # Truncate long tracebacks for display
-                if len(err) > 200:
-                    err = err[:200] + "..."
-                print(f"  {label} | FAILED: {err}")
-            else:
-                all_results.append(result)
-                print(f"  {label} | F1={result['f1']:.3f}  PA-F1={result['pa_f1']:.3f}  "
-                      f"P={result['precision']:.3f}  R={result['recall']:.3f}  "
-                      f"({result['time_s']:.0f}s, {result['n_series']}/{len(data_cache[result['category']][1])} series)")
+    # Phase 1: Run CPU jobs in parallel
+    if cpu_jobs:
+        cpu_workers = max_workers or len(cpu_jobs)
+        print(f"\n--- CPU jobs ({len(cpu_jobs)}) with {cpu_workers} threads ---")
+        with ThreadPoolExecutor(max_workers=cpu_workers) as executor:
+            futures = {}
+            for cfg, cat in cpu_jobs:
+                future = executor.submit(
+                    run_one_job, cfg, cat, data_cache, args.num_train, project_root
+                )
+                futures[future] = (cfg, cat)
+            for future in as_completed(futures):
+                collect_result(future.result())
+
+    # Phase 2: Run GPU jobs sequentially (avoid model download/GPU contention)
+    if gpu_jobs:
+        print(f"\n--- GPU jobs ({len(gpu_jobs)}) sequential ---")
+        for cfg, cat in gpu_jobs:
+            result = run_one_job(cfg, cat, data_cache, args.num_train, project_root)
+            collect_result(result)
 
     wall_time = time.time() - t_start
     print(f"\nWall time: {wall_time:.0f}s")

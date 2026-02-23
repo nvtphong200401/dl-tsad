@@ -1,0 +1,29 @@
+experiment:
+  name: "phase2_llm_fast"
+  description: "Evidence extraction + LLM reasoning (no foundation model, fast)"
+
+data_processing:
+  type: "RawWindowProcessor"
+  window_size: 100
+  stride: 10
+
+detection:
+  type: "EvidenceBasedDetection"
+  params:
+    enabled_categories:
+      - statistical_tests
+      - distribution_based
+      - pattern_based
+
+scoring:
+  type: "LLMReasoningScoring"
+  params:
+    backend_type: "azure_openai"
+    batch_size: 10
+    temperature: 0.0
+
+postprocessing:
+  threshold:
+    type: "F1OptimalThreshold"
+  min_anomaly_length: 3
+  merge_gap: 5
