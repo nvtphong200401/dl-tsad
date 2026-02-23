@@ -37,6 +37,8 @@ class TimesFMWrapper(FoundationModel):
             self.model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
                 self.model_name
             )
+            # TimesFM 2.5 requires compile() before forecast()
+            self.model.compile(timesfm.ForecastConfig())
             print(f"Loaded TimesFM model: {self.model_name}")
         except ImportError:
             raise ImportError(
