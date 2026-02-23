@@ -74,6 +74,8 @@ def run_one_job(config_name, category, data_cache, num_train, project_root):
         total_time = 0
         n_ok = 0
 
+        print(f"\n{label} | Evaluating on {len(eval_series)} series...")
+
         for series, labels in eval_series:
             try:
                 t0 = time.time()
@@ -83,6 +85,7 @@ def run_one_job(config_name, category, data_cache, num_train, project_root):
                 all_y_pred.append(result.predictions)
                 all_scores.append(result.point_scores)
                 n_ok += 1
+                print(f"  {label} | Series {n_ok}/{len(eval_series)} evaluated ({len(labels)} points, {labels.sum()} anomalies)")
             except Exception:
                 continue
 
@@ -92,6 +95,7 @@ def run_one_job(config_name, category, data_cache, num_train, project_root):
         y_true = np.concatenate(all_y_true)
         y_pred = np.concatenate(all_y_pred)
         scores = np.concatenate(all_scores)
+        print(f"  Evaluated {n_ok}/{len(eval_series)} series successfully ({len(y_true)} points)")
         ev = evaluator.evaluate(y_true=y_true, y_pred=y_pred, scores=scores)
 
         return {
