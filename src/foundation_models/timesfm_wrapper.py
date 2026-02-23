@@ -37,8 +37,7 @@ class TimesFMWrapper(FoundationModel):
             self.model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
                 self.model_name
             )
-            # TimesFM 2.5 requires compile() before forecast()
-            self.model.compile(timesfm.ForecastConfig())
+            self._compiled_horizon = None  # Track compiled horizon
             print(f"Loaded TimesFM model: {self.model_name}")
         except ImportError:
             raise ImportError(
@@ -47,6 +46,15 @@ class TimesFMWrapper(FoundationModel):
             )
         except Exception as e:
             raise RuntimeError(f"Failed to load TimesFM model: {e}")
+
+    def _ensure_compiled(self, horizon):
+        """Compile model for the given horizon (only recompiles if horizon changes)."""
+        if self._compiled_horizon != horizon:
+            import timesfm
+            self.model.compile(timesfm.ForecastConfig(
+                max_horizon=horizon,
+            ))
+            self._compiled_horizon = horizon
 
     def forecast(
         self,
@@ -79,6 +87,7 @@ class TimesFMWrapper(FoundationModel):
 
         # TimesFM accepts list of arrays
         try:
+            self._ensure_compiled(horizon)
             point_forecast, quantile_forecast = self.model.forecast(
                 horizon=horizon,
                 inputs=[context.astype(np.float32)],
@@ -121,6 +130,7 @@ class TimesFMWrapper(FoundationModel):
             self.load_model()
 
         inputs = [c.astype(np.float32).flatten() for c in contexts]
+        self._ensure_compiled(horizon)
         point_forecasts, quantile_forecasts = self.model.forecast(
             horizon=horizon,
             inputs=inputs,
