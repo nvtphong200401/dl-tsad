@@ -107,3 +107,36 @@ class TimesFMWrapper(FoundationModel):
 
         except Exception as e:
             raise RuntimeError(f"TimesFM forecast failed: {e}")
+
+    def forecast_batch(
+        self,
+        contexts: list,
+        horizon: int,
+        **kwargs
+    ) -> list:
+        """Batch forecast — TimesFM natively supports list of arrays."""
+        if not self.is_loaded():
+            self.load_model()
+
+        inputs = [c.astype(np.float32).flatten() for c in contexts]
+        point_forecasts, quantile_forecasts = self.model.forecast(
+            horizon=horizon,
+            inputs=inputs,
+        )
+        # point_forecasts: (N, H), quantile_forecasts: (N, H, Q)
+        results = []
+        for i in range(len(inputs)):
+            point = point_forecasts[i]
+            quantiles = {}
+            if quantile_forecasts is not None and len(quantile_forecasts.shape) == 3:
+                q = quantile_forecasts[i]
+                if q.shape[1] >= 5:
+                    quantiles['P10'] = q[:, 1]
+                    quantiles['P50'] = point
+                    quantiles['P90'] = q[:, -2]
+            results.append({
+                'forecast': point,
+                'quantiles': quantiles if quantiles else None,
+                'model': 'timesfm',
+            })
+        return results

@@ -1,0 +1,26 @@
+{
+  "timestamp": "20260223_112707",
+  "wall_time_s": 1025.360025882721,
+  "configs": [
+    "baseline_f1optimal",
+    "phase2_evidence_fast"
+  ],
+  "categories": [
+    "point",
+    "range",
+    "trend",
+    "freq"
+  ],
+  "num_train_series": 5,
+  "workers": 8,
+  "per_config": {
+    "baseline_f1optimal": {
+      "avg_f1": 0.2243459675079707,
+      "avg_pa_f1": 0.6432536122557119
+    },
+    "phase2_evidence_fast": {
+      "avg_f1": 0.10073308314797824,
+      "avg_pa_f1": 0.7372069644353743
+    }
+  }
+}

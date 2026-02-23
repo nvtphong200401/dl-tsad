@@ -1,0 +1,2 @@
+config,category,f1,precision,recall,pa_f1,detected,total_anomalies,n_series,total_points,num_train_series,time_s,label
+phase2_evidence_all,trend,0.0,0.0,0.0,0.0,90,0,1,1000,5,25.092693090438843,phase2_evidence_all            | trend     

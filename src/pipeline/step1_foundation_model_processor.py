@@ -33,8 +33,8 @@ class FoundationModelProcessor(DataProcessor):
         window_config: WindowConfig,
         forecast_horizon: Optional[int] = None,
         models: List[str] = ['chronos'],
-        timesfm_model: str = "google/timesfm-1.0-200m",
-        chronos_model: str = "amazon/chronos-t5-tiny",  # Use tiny for speed
+        timesfm_model: str = "google/timesfm-2.5-200m-pytorch",
+        chronos_model: str = "amazon/chronos-t5-small",
         ensemble_strategy: str = 'average',
         num_samples: int = 50  # Reduced for speed
     ):
@@ -127,32 +127,44 @@ class FoundationModelProcessor(DataProcessor):
         normalized = (windows_flat - self.train_mean) / self.train_std
         normalized = normalized.reshape(N, W, D)
 
-        # Generate forecasts for each window
+        # Generate forecasts — try batch mode first (much faster), fall back to per-window
         print(f"  Generating forecasts for {N} windows...")
         self.forecast_results = []
 
-        for i, window in enumerate(normalized):
-            # Use window as context for forecasting
-            # For multivariate, use first dimension (TODO: improve)
-            context = window[:, 0] if D > 1 else window.squeeze()
+        contexts = [normalized[i, :, 0] if D > 1 else normalized[i].squeeze()
+                    for i in range(N)]
 
-            try:
-                forecast_result = self.forecaster.forecast(
-                    context=context,
-                    horizon=self.forecast_horizon,
-                    strategy=self.ensemble_strategy,
-                    num_samples=self.num_samples
-                )
-                self.forecast_results.append(forecast_result)
+        batch_ok = False
+        try:
+            batch_results = self.forecaster.forecast_batch(
+                contexts=contexts,
+                horizon=self.forecast_horizon,
+                strategy=self.ensemble_strategy,
+                num_samples=self.num_samples
+            )
+            self.forecast_results = batch_results
+            batch_ok = True
+        except (AttributeError, NotImplementedError, TypeError):
+            pass
 
-            except Exception as e:
-                print(f"    Warning: Forecast failed for window {i}: {e}")
-                # Create dummy forecast
-                self.forecast_results.append({
-                    'forecast': np.zeros(self.forecast_horizon),
-                    'quantiles': None,
-                    'error': str(e)
-                })
+        if not batch_ok:
+            for i, context in enumerate(contexts):
+                try:
+                    forecast_result = self.forecaster.forecast(
+                        context=context,
+                        horizon=self.forecast_horizon,
+                        strategy=self.ensemble_strategy,
+                        num_samples=self.num_samples
+                    )
+                    self.forecast_results.append(forecast_result)
+                except Exception as e:
+                    if i == 0:
+                        print(f"    Warning: Forecast failed for window {i}: {e}")
+                    self.forecast_results.append({
+                        'forecast': np.zeros(self.forecast_horizon),
+                        'quantiles': None,
+                        'error': str(e)
+                    })
 
         print(f"  Generated {len(self.forecast_results)} forecasts")
 

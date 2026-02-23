@@ -33,12 +33,50 @@ class ChronosWrapper(FoundationModel):
         try:
             import torch
             from chronos import ChronosPipeline
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.pipeline = ChronosPipeline.from_pretrained(
-                self.model_name,
-                device_map=device,
-            )
-            print(f"Loaded Chronos model: {self.model_name} on {device}")
+            use_cuda = torch.cuda.is_available()
+
+            # Try multiple loading strategies (different envs need different approaches)
+            pipeline = None
+            device_used = "cpu"
+
+            if use_cuda:
+                # Strategy 1: device_map="cuda" (works on most setups)
+                try:
+                    pipeline = ChronosPipeline.from_pretrained(
+                        self.model_name,
+                        device_map="cuda",
+                        torch_dtype=torch.float32,
+                    )
+                    device_used = "cuda"
+                except Exception:
+                    pass
+
+                # Strategy 2: Load on CPU, move inner model to GPU
+                if pipeline is None:
+                    try:
+                        pipeline = ChronosPipeline.from_pretrained(
+                            self.model_name,
+                            torch_dtype=torch.float32,
+                        )
+                        if hasattr(pipeline, 'model'):
+                            pipeline.model = pipeline.model.to("cuda")
+                        if hasattr(pipeline, 'device'):
+                            pipeline.device = torch.device("cuda")
+                        device_used = "cuda"
+                    except Exception:
+                        pipeline = None
+
+            # Strategy 3: CPU fallback (always works)
+            if pipeline is None:
+                pipeline = ChronosPipeline.from_pretrained(
+                    self.model_name,
+                    torch_dtype=torch.float32,
+                )
+                device_used = "cpu"
+
+            self.pipeline = pipeline
+            self.device = torch.device(device_used)
+            print(f"Loaded Chronos model: {self.model_name} on {device_used}")
         except ImportError:
             raise ImportError(
                 "Chronos not installed. Install with: pip install chronos-forecasting"
@@ -145,3 +183,48 @@ class ChronosWrapper(FoundationModel):
                     forecast_result['quantiles']['P99'])
         else:
             raise ValueError(f"Confidence {confidence} not supported. Use 0.80, 0.90, or 0.98")
+
+    def forecast_batch(
+        self,
+        contexts: list,
+        horizon: int,
+        num_samples: int = 50,
+        **kwargs
+    ) -> list:
+        """Batch forecast — Chronos supports batched tensor input."""
+        if not self.is_loaded():
+            self.load_model()
+
+        import torch
+
+        # Stack all contexts into a single batch tensor (N, T)
+        batch = np.stack([c.flatten() for c in contexts])  # (N, T)
+        batch_tensor = torch.tensor(batch, dtype=torch.float32)
+
+        samples = self.pipeline.predict(
+            batch_tensor,
+            prediction_length=horizon,
+            num_samples=num_samples,
+        )
+        # samples: (N, num_samples, H)
+        samples_np = samples.cpu().numpy()
+
+        results = []
+        for i in range(len(contexts)):
+            s = samples_np[i]  # (num_samples, H)
+            quantiles = {
+                'P01': np.quantile(s, 0.01, axis=0),
+                'P10': np.quantile(s, 0.10, axis=0),
+                'P25': np.quantile(s, 0.25, axis=0),
+                'P50': np.quantile(s, 0.50, axis=0),
+                'P75': np.quantile(s, 0.75, axis=0),
+                'P90': np.quantile(s, 0.90, axis=0),
+                'P99': np.quantile(s, 0.99, axis=0),
+            }
+            results.append({
+                'forecast': quantiles['P50'],
+                'quantiles': quantiles,
+                'samples': s,
+                'model': 'chronos',
+            })
+        return results

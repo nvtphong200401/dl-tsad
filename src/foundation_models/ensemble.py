@@ -131,6 +131,83 @@ class EnsembleForecaster:
             'models_used': list(individual_forecasts.keys())
         }
 
+    def forecast_batch(
+        self,
+        contexts: List[np.ndarray],
+        horizon: int,
+        strategy: str = 'average',
+        num_samples: int = 100,
+        **kwargs
+    ) -> List[Dict]:
+        """Batch forecast all windows at once (much faster than per-window).
+
+        Args:
+            contexts: List of context arrays, each (T,)
+            horizon: Forecast horizon
+            strategy: Ensemble strategy
+            num_samples: Samples for Chronos
+
+        Returns:
+            List of forecast dicts, one per context
+        """
+        N = len(contexts)
+        individual_batch = {}
+
+        for name, model in self.models.items():
+            try:
+                if hasattr(model, 'forecast_batch'):
+                    individual_batch[name] = model.forecast_batch(
+                        contexts=contexts, horizon=horizon,
+                        num_samples=num_samples if name == 'chronos' else 0
+                    )
+                else:
+                    # Fall back to per-item
+                    results = []
+                    for ctx in contexts:
+                        r = model.forecast(context=ctx, horizon=horizon,
+                                           num_samples=num_samples if name == 'chronos' else 0)
+                        results.append(r)
+                    individual_batch[name] = results
+            except Exception as e:
+                print(f"Warning: {name} batch forecast failed: {e}")
+
+        if not individual_batch:
+            raise RuntimeError("All batch forecasting models failed")
+
+        # Assemble per-window results
+        results = []
+        for i in range(N):
+            window_forecasts = {}
+            for name in individual_batch:
+                if i < len(individual_batch[name]):
+                    window_forecasts[name] = individual_batch[name][i]
+
+            if not window_forecasts:
+                results.append({
+                    'forecast': np.zeros(horizon),
+                    'quantiles': None,
+                    'error': 'No models produced output'
+                })
+                continue
+
+            # Ensemble
+            if strategy == 'average' and len(window_forecasts) > 1:
+                point = np.mean([f['forecast'] for f in window_forecasts.values()], axis=0)
+            else:
+                point = list(window_forecasts.values())[0]['forecast']
+
+            quantiles = window_forecasts.get('chronos', {}).get('quantiles')
+            samples = window_forecasts.get('chronos', {}).get('samples')
+
+            results.append({
+                'forecast': point,
+                'quantiles': quantiles,
+                'samples': samples,
+                'models_used': list(window_forecasts.keys()),
+            })
+
+        return results
+
     def _estimate_uncertainty(
         self,
         individual_forecasts: Dict,

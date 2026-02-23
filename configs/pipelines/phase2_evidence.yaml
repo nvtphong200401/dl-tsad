@@ -9,7 +9,7 @@ data_processing:
   params:
     forecast_horizon: 30
     models: ['chronos']
-    chronos_model: "amazon/chronos-t5-tiny"
+    chronos_model: "amazon/chronos-t5-small"
     num_samples: 20
     ensemble_strategy: "average"
 
