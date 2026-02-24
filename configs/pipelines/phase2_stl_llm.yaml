@@ -1,16 +1,21 @@
 experiment:
-  name: "phase2_llm_fast"
-  description: "Evidence extraction + LLM reasoning (no foundation model, fast)"
+  name: "phase2_stl_llm"
+  description: "STL decomposition + evidence extraction + LLM reasoning (fast Step 1)"
 
 data_processing:
-  type: "RawWindowProcessor"
+  type: "STLProcessor"
   window_size: 100
   stride: 10
+  params:
+    forecast_horizon: 64
+    robust: true
+    num_synthetic_samples: 50
 
 detection:
   type: "EvidenceBasedDetection"
   params:
     enabled_categories:
+      - forecast_based
       - statistical_tests
       - distribution_based
       - pattern_based

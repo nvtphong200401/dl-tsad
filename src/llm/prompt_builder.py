@@ -8,31 +8,40 @@ import numpy as np
 from typing import Dict, List, Optional
 
 
-SYSTEM_PROMPT = """You are an expert time series analyst. Your task is to identify ONLY truly anomalous windows from statistical evidence.
+SYSTEM_PROMPT = """You are an expert time series analyst performing anomaly detection.
 
-CRITICAL: Most windows are NORMAL. Typically only 3-10% of windows contain real anomalies. Be conservative — only flag a window as anomalous when you see STRONG, CONVERGENT evidence from MULTIPLE metrics.
+CRITICAL CONTEXT:
+- These candidate windows are the top 10% most statistically suspicious from ~90 windows.
+- Being in the top 10% does NOT mean anomalous. In most time series, 0-3% of windows contain real anomalies.
+- Expect 0-1 truly anomalous windows per batch. Many batches will have ZERO anomalies.
+- The baseline windows show what NORMAL looks like. Candidates with similar metric magnitudes are NORMAL.
 
-Decision thresholds (a single metric alone is NOT enough):
-- Z-score > 3.0 AND at least one other signal → possible anomaly
-- Volatility ratio > 3.0x AND distribution shift → possible anomaly
-- CUSUM change point AND trend break → possible anomaly
-- Moderate values across all metrics → NORMAL (this is baseline noise)
+IMPORTANT - common false positive traps:
+- High KL divergence alone is NOT an anomaly indicator (different sampling regions cause this naturally)
+- Violation ratio close to 1.0 can be normal if baseline windows also show high violation ratios
+- Z-scores of 3-5 can occur naturally in the tails of normal distributions
+- Only flag anomalies when metrics are DRAMATICALLY higher than baseline (e.g., 3-10x)
+
+Decision criteria (ALL must be met):
+1. Multiple metrics must be elevated SIMULTANEOUSLY (not just one)
+2. The values must be dramatically different from baseline windows (not just slightly higher)
+3. The raw time series values should show visible deviation (sudden spike, level shift, or pattern break)
 
 Confidence calibration:
-- 0.0-0.2: Normal window, no concerning signals
-- 0.2-0.4: Slightly unusual but likely noise
-- 0.4-0.6: Ambiguous, some signals but not conclusive
-- 0.6-0.8: Likely anomaly, multiple convergent signals
-- 0.8-1.0: Clear anomaly, strong convergent evidence
+- 0.0-0.3: Normal (default for most windows)
+- 0.3-0.5: Slightly unusual, probably noise
+- 0.5-0.7: Suspicious but not conclusive
+- 0.7-0.85: Likely anomaly (metrics 5x+ above baseline with convergent evidence)
+- 0.85-1.0: Clear anomaly (extreme deviation across all metrics)
 
-Output valid JSON:
+Output valid JSON with ONLY the candidate windows (not baseline windows):
 {
   "windows": [
     {
       "window_index": 0,
       "is_anomaly": false,
-      "confidence": 0.15,
-      "reasoning": "All metrics within normal range.",
+      "confidence": 0.1,
+      "reasoning": "Metrics within normal range for this series.",
       "evidence_cited": []
     }
   ]
@@ -40,44 +49,123 @@ Output valid JSON:
 
 Rules:
 - confidence between 0.0 and 1.0
-- is_anomaly = true ONLY if confidence >= 0.6
-- Most windows should have confidence < 0.3
-- Keep reasoning concise (1 sentence)"""
+- is_anomaly = true ONLY if confidence >= 0.7
+- Expect MOST or ALL candidates to be normal (confidence < 0.3)
+- It is completely valid to flag ZERO anomalies in a batch
+- Keep reasoning concise (1 sentence)
+- Do NOT include baseline windows in output"""
+
+
+def _compute_baseline_averages(baseline_evidence: List[Dict]) -> Dict[str, float]:
+    """Compute average metric values from baseline evidence for normalization."""
+    if not baseline_evidence:
+        return {}
+    keys = ['mae', 'mse', 'mape', 'max_abs_z_score', 'grubbs_statistic',
+            'max_cusum', 'kl_divergence', 'normalized_wasserstein',
+            'volatility_ratio', 'violation_ratio', 'mean_surprise',
+            'max_acf_diff', 'slope_diff']
+    avgs = {}
+    for k in keys:
+        vals = [e.get(k) for e in baseline_evidence if isinstance(e.get(k), (int, float))]
+        if vals:
+            avgs[k] = max(sum(vals) / len(vals), 1e-10)
+    return avgs
+
+
+def _format_relative_evidence(evidence: Dict, baseline_avgs: Dict[str, float]) -> str:
+    """Format evidence as ratios relative to baseline averages."""
+    lines = []
+    metrics = [
+        ('mae', 'MAE'),
+        ('mse', 'MSE'),
+        ('max_abs_z_score', 'Max Z-Score'),
+        ('volatility_ratio', 'Volatility Ratio'),
+        ('kl_divergence', 'KL Divergence'),
+        ('violation_ratio', 'Quantile Violation Rate'),
+        ('mean_surprise', 'Surprise Score'),
+        ('max_cusum', 'CUSUM Max'),
+        ('grubbs_statistic', 'Grubbs Statistic'),
+        ('normalized_wasserstein', 'Wasserstein Distance'),
+        ('max_acf_diff', 'ACF Break'),
+        ('slope_diff', 'Slope Diff'),
+    ]
+    for key, label in metrics:
+        if key not in evidence or not isinstance(evidence[key], (int, float)):
+            continue
+        val = evidence[key]
+        if key in baseline_avgs and baseline_avgs[key] > 1e-10:
+            ratio = val / baseline_avgs[key]
+            if ratio > 3.0:
+                flag = " **ELEVATED**"
+            elif ratio > 1.5:
+                flag = " (slightly above)"
+            else:
+                flag = ""
+            lines.append(f"- {label}: {val:.3f} ({ratio:.1f}x baseline){flag}")
+        else:
+            lines.append(f"- {label}: {val:.3f}")
+
+    # Boolean/special fields
+    if evidence.get('grubbs_is_outlier'):
+        lines.append(f"- Grubbs Test: OUTLIER at position {evidence.get('grubbs_outlier_index', '?')}")
+    if evidence.get('cusum_has_change_point'):
+        lines.append(f"- CUSUM: Change point detected")
+    if evidence.get('trend_break'):
+        lines.append(f"- Trend Break: YES")
+    if evidence.get('period_changed'):
+        lines.append(f"- Period Changed: YES")
+
+    return "\n".join(lines) if lines else "No evidence available"
 
 
 def build_batch_prompt(
     windows: List[np.ndarray],
     evidence_list: List[Dict],
-    window_indices: List[int]
+    window_indices: List[int],
+    baseline_windows: Optional[List[np.ndarray]] = None,
+    baseline_evidence: Optional[List[Dict]] = None
 ) -> str:
-    """Build prompt for a batch of windows.
+    """Build prompt for a batch of windows with baseline-relative evidence.
 
     Args:
         windows: List of window arrays (W,) or (W, D)
         evidence_list: List of evidence dicts from Step 2
         window_indices: Original window indices
+        baseline_windows: Optional normal windows for contrast
+        baseline_evidence: Optional evidence for normal windows
 
     Returns:
         Formatted user prompt string
     """
     sections = ["# Time Series Anomaly Analysis\n"]
-    sections.append(f"Analyze the following {len(windows)} windows and determine if each contains anomalies.\n")
 
-    for i, (window, evidence, idx) in enumerate(zip(windows, evidence_list, window_indices)):
-        sections.append(f"---\n## Window {idx}\n")
+    # Compute baseline averages for relative scoring
+    baseline_avgs = _compute_baseline_averages(baseline_evidence) if baseline_evidence else {}
 
-        # Time series data
+    if baseline_avgs:
+        sections.append("## Baseline Reference (average of confirmed normal windows)\n")
+        for key, label in [('mae', 'MAE'), ('max_abs_z_score', 'Z-Score'),
+                           ('kl_divergence', 'KL Div'), ('volatility_ratio', 'Volatility'),
+                           ('violation_ratio', 'Violation Rate')]:
+            if key in baseline_avgs:
+                sections.append(f"- {label}: {baseline_avgs[key]:.3f}")
+        sections.append("\nCandidate metrics are shown as ratios vs these baselines.")
+        sections.append("Only flag windows where metrics are **3x+ above baseline** across multiple metrics.\n")
+
+    # Show candidate windows with relative evidence
+    sections.append(f"## Candidate Windows ({len(windows)} windows)\n")
+
+    for window, evidence, idx in zip(windows, evidence_list, window_indices):
+        sections.append(f"---\n### Window {idx}\n")
+
         values = window.squeeze() if hasattr(window, 'squeeze') else window
         sections.append(format_time_series(values))
 
-        # Evidence
-        sections.append("\n### Statistical Evidence\n")
-        sections.append(format_forecast_evidence(evidence))
-        sections.append(format_statistical_tests(evidence))
-        sections.append(format_distribution_evidence(evidence))
-        sections.append(format_pattern_evidence(evidence))
+        sections.append("\n**Evidence (vs baseline):**")
+        sections.append(_format_relative_evidence(evidence, baseline_avgs))
+        sections.append("")
 
-    sections.append("\n---\nPlease analyze all windows above and return JSON output.")
+    sections.append(f"\n---\nAnalyze the {len(windows)} windows. Return JSON. Most should be confidence < 0.3.")
     return "\n".join(sections)
 
 

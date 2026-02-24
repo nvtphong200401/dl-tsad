@@ -1,0 +1,18 @@
+{
+  "timestamp": "20260224_185236",
+  "wall_time_s": 5077.809938669205,
+  "configs": [
+    "phase2_stl_llm"
+  ],
+  "categories": [
+    "freq"
+  ],
+  "num_train_series": 5,
+  "workers": 1,
+  "per_config": {
+    "phase2_stl_llm": {
+      "avg_f1": 0.07166362285709421,
+      "avg_pa_f1": 0.7661493307244186
+    }
+  }
+}

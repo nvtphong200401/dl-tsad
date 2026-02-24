@@ -64,7 +64,7 @@ class F1OptimalThreshold(ThresholdDetermination):
         # Try percentiles from 80 to 99.9
         for p in np.linspace(80, 99.9, 100):
             thresh = np.percentile(scores, p)
-            preds = (scores > thresh).astype(int)
+            preds = (scores >= thresh).astype(int)
 
             # Compute F1
             tp = np.sum((preds == 1) & (labels == 1))
@@ -124,7 +124,7 @@ class PostProcessor:
         threshold = self.threshold_method.find_threshold(scores, labels)
 
         # Step 2: Extract anomalies
-        predictions = (scores > threshold).astype(int)
+        predictions = (scores >= threshold).astype(int)
 
         # Step 3: Filter short anomalies
         if self.min_anomaly_length > 1:

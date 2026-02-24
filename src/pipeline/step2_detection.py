@@ -241,28 +241,27 @@ class EvidenceBasedDetection(DetectionMethod):
             window = X_processed[i, :, 0]
 
             # Get forecast for this window (if available)
-            # Fix: align forecast with actual future values, not the context window.
-            # Window i covers positions [i, i+W-1]. The forecast predicts positions
-            # [i+W, i+W+H-1]. With stride=1, window i+W starts at position i+W,
-            # so X_processed[i+W, :, 0] gives actual values at [i+W, i+2W-1].
+            # In-window forecast: compares expected vs actual within the same window.
+            # Forward forecast: compares forecast vs actual future from window i+W.
             forecast_result = None
+            actual_for_forecast = None
             if self.forecast_results is not None and i < len(self.forecast_results):
                 fr = self.forecast_results[i]
-                if fr.get('forecast') is not None and (i + W) < N:
+                if fr.get('forecast') is not None:
                     H = len(fr['forecast'])
-                    # Get actual future values from subsequent windows
-                    actual_future = X_processed[i + W, :min(H, W), 0]
-                    forecast_result = {
-                        **fr,
-                        '_actual_future': actual_future,
-                    }
-                else:
-                    forecast_result = fr
-
-            # Extract evidence — pass actual future for forecast comparison
-            actual_for_forecast = None
-            if forecast_result is not None and '_actual_future' in forecast_result:
-                actual_for_forecast = forecast_result.pop('_actual_future')
+                    if H == W:
+                        # In-window forecast (e.g., STLProcessor): forecast predicts
+                        # what THIS window should look like. Compare forecast vs window.
+                        forecast_result = fr
+                        actual_for_forecast = window
+                    elif (i + W) < N:
+                        # Forward forecast (e.g., FoundationModelProcessor): forecast
+                        # predicts future. Compare forecast vs actual future window.
+                        actual_future = X_processed[i + W, :min(H, W), 0]
+                        forecast_result = fr
+                        actual_for_forecast = actual_future
+                    else:
+                        forecast_result = fr
 
             evidence = self.extractor.extract(
                 test_window=window,

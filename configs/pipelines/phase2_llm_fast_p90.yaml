@@ -20,12 +20,12 @@ scoring:
   params:
     backend_type: "azure_openai"
     batch_size: 10
-    temperature: 0.0
+    pre_filter_percentile: 90
 
 postprocessing:
   threshold:
     type: "PercentileThreshold"
     params:
-      percentile: 90.0
+      percentile: 95.0
   min_anomaly_length: 3
   merge_gap: 5

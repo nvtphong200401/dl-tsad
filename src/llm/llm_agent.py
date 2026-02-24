@@ -39,6 +39,8 @@ class LLMAnomalyAgent:
         self,
         windows: np.ndarray,
         evidence_list: List[Dict],
+        baseline_windows: Optional[List[np.ndarray]] = None,
+        baseline_evidence: Optional[List[Dict]] = None,
         progress: bool = True
     ) -> np.ndarray:
         """Analyze all windows and return confidence scores.
@@ -46,6 +48,8 @@ class LLMAnomalyAgent:
         Args:
             windows: Test windows (N, W, D)
             evidence_list: Evidence dicts from EvidenceBasedDetection
+            baseline_windows: Optional normal windows for contrast
+            baseline_evidence: Optional evidence for normal windows
             progress: Print progress info
 
         Returns:
@@ -73,7 +77,11 @@ class LLMAnomalyAgent:
                 print(f"    Batch {batch_idx + 1}/{n_batches}...")
 
             try:
-                result = self._analyze_batch(batch_windows, batch_evidence, batch_indices)
+                result = self._analyze_batch(
+                    batch_windows, batch_evidence, batch_indices,
+                    baseline_windows=baseline_windows,
+                    baseline_evidence=baseline_evidence
+                )
                 self.llm_results.append(result)
 
                 # Extract confidence scores
@@ -122,10 +130,16 @@ class LLMAnomalyAgent:
         self,
         windows: List[np.ndarray],
         evidence_list: List[Dict],
-        window_indices: List[int]
+        window_indices: List[int],
+        baseline_windows: Optional[List[np.ndarray]] = None,
+        baseline_evidence: Optional[List[Dict]] = None
     ) -> Dict:
         """Analyze a batch of windows in a single LLM call."""
-        prompt = build_batch_prompt(windows, evidence_list, window_indices)
+        prompt = build_batch_prompt(
+            windows, evidence_list, window_indices,
+            baseline_windows=baseline_windows,
+            baseline_evidence=baseline_evidence
+        )
         raw_response = self.backend.generate_with_retry(
             SYSTEM_PROMPT, prompt, self.temperature
         )

@@ -1,26 +1,27 @@
 experiment:
-  name: "phase2_llm_fast"
-  description: "Evidence extraction + LLM reasoning (no foundation model, fast)"
+  name: "phase2_stl_avg_f1"
+  description: "STL + evidence + average pooling + F1-optimal threshold (supervised)"
 
 data_processing:
-  type: "RawWindowProcessor"
+  type: "STLProcessor"
   window_size: 100
   stride: 10
+  params:
+    forecast_horizon: 64
+    robust: true
+    num_synthetic_samples: 50
 
 detection:
   type: "EvidenceBasedDetection"
   params:
     enabled_categories:
+      - forecast_based
       - statistical_tests
       - distribution_based
       - pattern_based
 
 scoring:
-  type: "LLMReasoningScoring"
-  params:
-    backend_type: "azure_openai"
-    batch_size: 10
-    pre_filter_percentile: 90
+  type: "AveragePoolingScoring"
 
 postprocessing:
   threshold:

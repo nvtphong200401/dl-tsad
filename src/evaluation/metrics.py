@@ -218,7 +218,7 @@ def compute_vus_pr(y_true: np.ndarray, scores: np.ndarray, num_thresholds: int =
     precisions_sorted = precisions[sorted_indices]
 
     # Compute area under PR curve using trapezoidal rule
-    vus_pr = np.trapz(precisions_sorted, recalls_sorted)
+    vus_pr = np.trapezoid(precisions_sorted, recalls_sorted)
 
     # Normalize to [0, 1] (recall goes from 0 to 1)
     vus_pr = max(0.0, min(1.0, vus_pr))

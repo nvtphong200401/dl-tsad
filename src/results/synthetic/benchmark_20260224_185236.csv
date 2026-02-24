@@ -1,0 +1,2 @@
+config,category,f1,precision,recall,pa_f1,detected,total_anomalies,n_series,total_points,num_train_series,time_s,label
+phase2_stl_llm,freq,0.07166362285709421,0.03803778018799711,0.6178521617852162,0.7661493307244186,221280,13623,400,400000,5,5072.4886639118195,phase2_stl_llm                 | freq      

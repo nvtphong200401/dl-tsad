@@ -83,11 +83,16 @@ class AveragePoolingScoring(ScoringMethod):
 
 
 class LLMReasoningScoring(ScoringMethod):
-    """LLM-based scoring that replaces heuristic aggregation with reasoning.
+    """LLM-based scoring with statistical pre-filtering.
 
-    Uses an LLM to analyze statistical evidence per window and produce
-    confidence scores. Falls back to max pooling of subsequence_scores
-    if LLM analysis is not available.
+    Two-stage approach:
+    1. Pre-filter: Use statistical scores from Step 2 to identify the
+       most suspicious windows (top K%).
+    2. LLM reasoning: Only send suspicious windows to the LLM for
+       detailed analysis. Normal windows keep their statistical score.
+
+    This reduces API calls by 80-90% while focusing LLM reasoning
+    where it matters most — on borderline and high-score windows.
 
     The orchestrator injects evidence via set_evidence_context() before
     calling score().
@@ -97,7 +102,8 @@ class LLMReasoningScoring(ScoringMethod):
         self,
         backend_type: str = "azure_openai",
         batch_size: int = 10,
-        temperature: float = 0.0,
+        temperature: Optional[float] = None,
+        pre_filter_percentile: float = 80.0,
         **backend_kwargs
     ):
         """Initialize LLM scoring.
@@ -105,7 +111,10 @@ class LLMReasoningScoring(ScoringMethod):
         Args:
             backend_type: "azure_openai", "gemini", or "claude"
             batch_size: Windows per LLM call (default: 10)
-            temperature: LLM temperature (default: 0.0)
+            temperature: LLM temperature
+            pre_filter_percentile: Only send windows scoring above this
+                percentile to the LLM. 80.0 = top 20% of windows.
+                Set to 0.0 to disable pre-filtering (send all windows).
             **backend_kwargs: Passed to backend constructor
         """
         import sys
@@ -119,6 +128,7 @@ class LLMReasoningScoring(ScoringMethod):
             batch_size=batch_size,
             temperature=temperature
         )
+        self.pre_filter_percentile = pre_filter_percentile
 
         # State set via set_evidence_context()
         self.evidence_list = None
@@ -150,11 +160,11 @@ class LLMReasoningScoring(ScoringMethod):
         stride: int,
         original_length: int
     ) -> np.ndarray:
-        """Score using LLM reasoning, with fallback to max pooling.
+        """Score using pre-filtered LLM reasoning.
 
-        If evidence is available, the LLM analyzes each window and
-        produces confidence scores that replace the heuristic scores.
-        Otherwise, falls back to standard max pooling.
+        Stage 1: Identify suspicious windows via statistical pre-filter.
+        Stage 2: Send only suspicious windows to LLM for reasoning.
+        Non-suspicious windows keep their normalized statistical score.
 
         Args:
             subsequence_scores: Window-level scores from Step 2 (N,)
@@ -165,26 +175,89 @@ class LLMReasoningScoring(ScoringMethod):
         Returns:
             Point-wise scores (T,)
         """
-        # If evidence available, use LLM scoring
+        N = len(subsequence_scores)
+        scores_to_pool = subsequence_scores.copy()
+
         if self.evidence_list is not None and self.windows is not None:
+            # Stage 1: Pre-filter — identify suspicious windows
+            if self.pre_filter_percentile > 0 and N > 0:
+                threshold = np.percentile(subsequence_scores, self.pre_filter_percentile)
+                suspicious_mask = subsequence_scores >= threshold
+                # Always send at least 1 window
+                if not np.any(suspicious_mask):
+                    suspicious_mask[np.argmax(subsequence_scores)] = True
+            else:
+                suspicious_mask = np.ones(N, dtype=bool)
+
+            suspicious_indices = np.where(suspicious_mask)[0]
+            n_suspicious = len(suspicious_indices)
+            n_skipped = N - n_suspicious
+
+            print(f"  Pre-filter: {n_suspicious}/{N} windows sent to LLM "
+                  f"({n_skipped} skipped, threshold=P{self.pre_filter_percentile:.0f})")
+
+            # Select normal contrast windows (lowest-scoring, clearly normal)
+            normal_mask = ~suspicious_mask
+            normal_indices = np.where(normal_mask)[0]
+            n_contrast = min(3, len(normal_indices))
+            if n_contrast > 0:
+                # Pick windows with lowest scores as contrast
+                lowest_indices = normal_indices[
+                    np.argsort(subsequence_scores[normal_indices])[:n_contrast]
+                ]
+                baseline_wins = [
+                    self.windows[i, :, 0] if self.windows.ndim == 3
+                    else self.windows[i]
+                    for i in lowest_indices
+                ]
+                baseline_evid = [self.evidence_list[i] for i in lowest_indices]
+            else:
+                baseline_wins = None
+                baseline_evid = None
+
+            # Stage 2: LLM reasoning on suspicious windows only
             try:
-                self.llm_scores = self.agent.analyze_windows(
-                    self.windows, self.evidence_list
+                filtered_windows = self.windows[suspicious_indices]
+                filtered_evidence = [self.evidence_list[i] for i in suspicious_indices]
+
+                llm_scores = self.agent.analyze_windows(
+                    filtered_windows, filtered_evidence,
+                    baseline_windows=baseline_wins,
+                    baseline_evidence=baseline_evid
                 )
-                # Use LLM confidence scores for pooling
-                scores_to_pool = self.llm_scores
+
+                # Merge: LLM scores for suspicious, normalize statistical for rest
+                self.llm_scores = np.zeros(N)
+                # Normalize statistical scores to 0-1 range for non-suspicious
+                s_min = subsequence_scores.min()
+                s_max = subsequence_scores.max()
+                s_range = s_max - s_min if s_max > s_min else 1.0
+                normalized_stat = (subsequence_scores - s_min) / s_range
+
+                # Non-suspicious windows: use normalized stat score (capped at 0.3)
+                scores_to_pool = normalized_stat * 0.3
+
+                # Suspicious windows: use LLM confidence score
+                for j, orig_idx in enumerate(suspicious_indices):
+                    if j < len(llm_scores):
+                        scores_to_pool[orig_idx] = llm_scores[j]
+                    self.llm_scores[orig_idx] = scores_to_pool[orig_idx]
+
             except Exception as e:
                 print(f"  Warning: LLM scoring failed, falling back to heuristic: {e}")
                 scores_to_pool = subsequence_scores
-        else:
-            scores_to_pool = subsequence_scores
 
-        # Convert window scores to point-wise via max pooling
+        # Convert window scores to point-wise via average pooling
         point_scores = np.zeros(original_length)
+        counts = np.zeros(original_length)
+
         for i, s in enumerate(scores_to_pool):
             start = i * stride
             end = min(start + window_size, original_length)
-            point_scores[start:end] = np.maximum(point_scores[start:end], s)
+            point_scores[start:end] += s
+            counts[start:end] += 1
+
+        point_scores = point_scores / np.maximum(counts, 1)
 
         return point_scores
 

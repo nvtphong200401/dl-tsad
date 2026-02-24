@@ -23,7 +23,7 @@ class LLMBackend(ABC):
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0
+        temperature: Optional[float] = None
     ) -> str:
         """Generate completion from LLM.
 
@@ -41,7 +41,7 @@ class LLMBackend(ABC):
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0,
+        temperature: Optional[float] = None,
         max_retries: int = 3
     ) -> str:
         """Generate with exponential backoff on failure."""
@@ -85,17 +85,19 @@ class AzureOpenAIBackend(LLMBackend):
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0
+        temperature: Optional[float] = None
     ) -> str:
-        response = self.client.chat.completions.create(
+        kwargs = dict(
             model=self.deployment,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=temperature,
             response_format={"type": "json_object"}
         )
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = self.client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
 
 
@@ -123,13 +125,16 @@ class GeminiBackend(LLMBackend):
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0
+        temperature: Optional[float] = None
     ) -> str:
         # Gemini: prepend system prompt to user prompt
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        gen_config = {}
+        if temperature is not None:
+            gen_config["temperature"] = temperature
         response = self.model.generate_content(
             full_prompt,
-            generation_config={"temperature": temperature}
+            generation_config=gen_config
         )
         return response.text
 
@@ -157,15 +162,17 @@ class ClaudeBackend(LLMBackend):
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0
+        temperature: Optional[float] = None
     ) -> str:
-        response = self.client.messages.create(
+        kwargs = dict(
             model=self.model,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
-            temperature=temperature,
             max_tokens=4096
         )
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = self.client.messages.create(**kwargs)
         return response.content[0].text
 
 

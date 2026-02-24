@@ -17,6 +17,7 @@ from ..pipeline import (
 
 # Phase 2 components
 from ..pipeline.step1_foundation_model_processor import FoundationModelProcessor
+from ..pipeline.step1_stl_processor import STLProcessor
 from ..pipeline.step2_detection import EvidenceBasedDetection
 from ..pipeline.step3_scoring import LLMReasoningScoring
 
@@ -81,6 +82,16 @@ def _build_data_processor(config: Dict[str, Any]):
             num_samples=params.get('num_samples', 20),
             ensemble_strategy=params.get('ensemble_strategy', 'average'),
         )
+    elif processor_type == 'STLProcessor':
+        return STLProcessor(
+            window_config=window_config,
+            forecast_horizon=params.get('forecast_horizon'),
+            period=params.get('period'),
+            seasonal=params.get('seasonal', 7),
+            trend=params.get('trend'),
+            robust=params.get('robust', True),
+            num_synthetic_samples=params.get('num_synthetic_samples', 50),
+        )
     elif processor_type == 'AERProcessor' and _SOTA_AVAILABLE:
         return AERProcessor(window_config, **params)
     elif processor_type == 'AnomalyTransformerProcessor' and _SOTA_AVAILABLE:
@@ -124,7 +135,8 @@ def _build_scoring_method(config: Dict[str, Any]):
         return LLMReasoningScoring(
             backend_type=params.get('backend_type', 'azure_openai'),
             batch_size=params.get('batch_size', 10),
-            temperature=params.get('temperature', 0.0),
+            temperature=params.get('temperature'),
+            pre_filter_percentile=params.get('pre_filter_percentile', 80.0),
         )
     elif scoring_type == 'WeightedAverageScoring' and _SOTA_AVAILABLE:
         return WeightedAverageScoring()

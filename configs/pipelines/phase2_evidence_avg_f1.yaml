@@ -1,6 +1,6 @@
 experiment:
-  name: "phase2_llm_fast"
-  description: "Evidence extraction + LLM reasoning (no foundation model, fast)"
+  name: "phase2_evidence_avg_f1"
+  description: "Evidence-only + average pooling + F1-optimal threshold (supervised)"
 
 data_processing:
   type: "RawWindowProcessor"
@@ -16,11 +16,7 @@ detection:
       - pattern_based
 
 scoring:
-  type: "LLMReasoningScoring"
-  params:
-    backend_type: "azure_openai"
-    batch_size: 10
-    pre_filter_percentile: 90
+  type: "AveragePoolingScoring"
 
 postprocessing:
   threshold:
