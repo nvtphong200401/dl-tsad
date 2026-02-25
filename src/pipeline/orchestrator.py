@@ -114,6 +114,13 @@ class AnomalyDetectionPipeline:
             if evidence is not None:
                 self.scoring_method.set_evidence_context(evidence, X_processed)
 
+        # Pass full series context from Step 1 to Step 3 (for range detection)
+        if hasattr(self.scoring_method, 'set_series_context'):
+            full_series = getattr(self.data_processor, 'get_full_series', lambda: None)()
+            deseasonalized = getattr(self.data_processor, 'get_deseasonalized_series', lambda: None)()
+            if full_series is not None or deseasonalized is not None:
+                self.scoring_method.set_series_context(full_series, deseasonalized)
+
         # Step 3: Scoring (sub-sequence → point-wise)
         point_scores = self.scoring_method.score(
             subsequence_scores,

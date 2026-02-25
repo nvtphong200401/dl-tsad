@@ -268,3 +268,234 @@ class LLMReasoningScoring(ScoringMethod):
     def get_call_count(self) -> int:
         """Get total LLM API calls made."""
         return self.agent.get_call_count() if self.agent else 0
+
+
+class LLMRangeDetectionScoring(ScoringMethod):
+    """AnoAgent-style LLM range detection scoring.
+
+    Instead of pooling window-level confidence scores, sends the full
+    deseasonalized series to the LLM and asks for anomaly ranges directly.
+    This produces precise anomaly boundaries and constrained detection count.
+
+    Pipeline integration:
+    - The orchestrator calls set_series_context() with the full series
+    - The orchestrator calls set_evidence_context() with evidence (optional)
+    - score() sends one LLM call per series and returns binary point scores
+    """
+
+    def __init__(
+        self,
+        backend_type: str = "azure_openai",
+        temperature: Optional[float] = None,
+        max_anomaly_ratio: float = 0.01,
+        min_anomalies: int = 3,
+        use_evidence_hints: bool = True,
+        use_deseasonalized: bool = True,
+        **backend_kwargs
+    ):
+        """Initialize LLM range detection scoring.
+
+        Args:
+            backend_type: "azure_openai", "gemini", or "claude"
+            temperature: LLM temperature (default: 0.0)
+            max_anomaly_ratio: Max fraction of series length used to compute
+                the anomaly count constraint. Default 0.01 per AnoAgent.
+            min_anomalies: Minimum anomaly count constraint. Default 3.
+            use_evidence_hints: If True, include evidence summary in prompt
+            use_deseasonalized: If True, use deseasonalized series;
+                if False, use raw series
+            **backend_kwargs: Passed to backend constructor
+        """
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from llm import create_backend
+
+        self.backend = create_backend(backend_type, **backend_kwargs)
+        self.temperature = temperature or 0.0
+        self.max_anomaly_ratio = max_anomaly_ratio
+        self.min_anomalies = min_anomalies
+        self.use_evidence_hints = use_evidence_hints
+        self.use_deseasonalized = use_deseasonalized
+
+        # State injected by orchestrator
+        self.full_series = None
+        self.deseasonalized_series = None
+        self.evidence_list = None
+        self.windows = None
+
+        # Results
+        self.last_ranges = None
+        self.call_count = 0
+
+    def set_series_context(
+        self,
+        full_series: np.ndarray,
+        deseasonalized_series: Optional[np.ndarray] = None
+    ) -> None:
+        """Inject full series from Step 1 processor.
+
+        Called by the orchestrator between Step 1 and Step 3.
+        """
+        self.full_series = full_series
+        self.deseasonalized_series = deseasonalized_series
+
+    def set_evidence_context(
+        self,
+        evidence_list: List[Dict],
+        windows: np.ndarray
+    ) -> None:
+        """Inject evidence from Step 2 (same interface as LLMReasoningScoring)."""
+        self.evidence_list = evidence_list
+        self.windows = windows
+
+    def score(
+        self,
+        subsequence_scores: np.ndarray,
+        window_size: int,
+        stride: int,
+        original_length: int
+    ) -> np.ndarray:
+        """Score using LLM range detection on full series.
+
+        Sends the full (deseasonalized) series to the LLM in one call.
+        LLM returns anomaly ranges which are directly converted to
+        point-level binary scores.
+        """
+        from llm.range_prompt_builder import (
+            RANGE_DETECTION_SYSTEM_PROMPT,
+            build_range_detection_prompt,
+            build_evidence_summary,
+        )
+        from llm.range_output_parser import parse_range_output, ranges_to_point_scores
+
+        # Choose which series to send
+        if self.use_deseasonalized and self.deseasonalized_series is not None:
+            series_to_send = self.deseasonalized_series
+            print(f"  LLM Range Detection: using deseasonalized series "
+                  f"({len(series_to_send)} points)")
+        elif self.full_series is not None:
+            series_to_send = self.full_series
+            print(f"  LLM Range Detection: using raw series "
+                  f"({len(series_to_send)} points)")
+        else:
+            # Fallback: reconstruct from windows
+            series_to_send = self._reconstruct_from_windows(
+                stride, original_length
+            )
+            print(f"  LLM Range Detection: reconstructed from windows "
+                  f"({len(series_to_send)} points)")
+
+        # Trim or pad to match original_length
+        if len(series_to_send) > original_length:
+            series_to_send = series_to_send[:original_length]
+        elif len(series_to_send) < original_length:
+            padded = np.zeros(original_length)
+            padded[:len(series_to_send)] = series_to_send
+            series_to_send = padded
+
+        # Compute anomaly count constraint (AnoAgent formula)
+        max_anomalies = max(
+            self.min_anomalies,
+            int(original_length * self.max_anomaly_ratio)
+        )
+
+        # Build evidence summary if available and enabled
+        evidence_summary = None
+        if (self.use_evidence_hints
+                and subsequence_scores is not None
+                and len(subsequence_scores) > 0):
+            evidence_summary = build_evidence_summary(
+                subsequence_scores, window_size, stride, top_k=5
+            )
+
+        # Build prompt
+        system_prompt = RANGE_DETECTION_SYSTEM_PROMPT.format(
+            max_anomalies=max_anomalies
+        )
+        user_prompt = build_range_detection_prompt(
+            series=series_to_send,
+            max_anomalies=max_anomalies,
+            evidence_summary=evidence_summary,
+        )
+
+        # Call LLM (single call per series)
+        try:
+            raw_response = self.backend.generate_with_retry(
+                system_prompt, user_prompt, self.temperature
+            )
+            self.call_count += 1
+
+            # Parse ranges
+            parsed = parse_range_output(raw_response)
+            anomaly_ranges = parsed.get("anomalies", [])
+            self.last_ranges = anomaly_ranges
+
+            if parsed.get("parse_error"):
+                print(f"  Warning: parse issue: {parsed['parse_error']}")
+
+            print(f"  LLM returned {len(anomaly_ranges)} anomaly ranges "
+                  f"(max allowed: {max_anomalies})")
+
+            # Convert ranges to point scores
+            point_scores = ranges_to_point_scores(anomaly_ranges, original_length)
+
+            n_flagged = int(point_scores.sum())
+            pct_flagged = 100 * n_flagged / original_length
+            print(f"  Flagged {n_flagged}/{original_length} points "
+                  f"({pct_flagged:.1f}%)")
+
+            return point_scores
+
+        except Exception as e:
+            print(f"  Warning: LLM range detection failed: {e}")
+            print(f"  Falling back to evidence-based scoring")
+            return self._fallback_scoring(
+                subsequence_scores, window_size, stride, original_length
+            )
+
+    def _reconstruct_from_windows(
+        self,
+        stride: int,
+        original_length: int,
+    ) -> np.ndarray:
+        """Reconstruct series from windows when full series not available."""
+        if self.windows is not None:
+            N = self.windows.shape[0]
+            W = self.windows.shape[1]
+            T = (N - 1) * stride + W
+            series = np.zeros(T)
+            counts = np.zeros(T)
+            for i in range(N):
+                start = i * stride
+                vals = (self.windows[i, :, 0] if self.windows.ndim == 3
+                        else self.windows[i])
+                series[start:start + W] += vals
+                counts[start:start + W] += 1
+            return series / np.maximum(counts, 1)
+        return np.zeros(original_length)
+
+    def _fallback_scoring(
+        self,
+        subsequence_scores: np.ndarray,
+        window_size: int,
+        stride: int,
+        original_length: int,
+    ) -> np.ndarray:
+        """Fallback: average pooling of evidence scores."""
+        point_scores = np.zeros(original_length)
+        counts = np.zeros(original_length)
+        for i, s in enumerate(subsequence_scores):
+            start = i * stride
+            end = min(start + window_size, original_length)
+            point_scores[start:end] += s
+            counts[start:end] += 1
+        return point_scores / np.maximum(counts, 1)
+
+    def get_last_ranges(self) -> Optional[List[Dict]]:
+        """Get anomaly ranges from last score() call."""
+        return self.last_ranges
+
+    def get_call_count(self) -> int:
+        """Get total LLM API calls made."""
+        return self.call_count

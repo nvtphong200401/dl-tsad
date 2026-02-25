@@ -14,7 +14,8 @@ from .step2_detection import (
 from .step3_scoring import (
     ScoringMethod,
     MaxPoolingScoring,
-    AveragePoolingScoring
+    AveragePoolingScoring,
+    LLMRangeDetectionScoring,
 )
 
 from .step4_postprocessing import (
@@ -41,6 +42,7 @@ __all__ = [
     'ScoringMethod',
     'MaxPoolingScoring',
     'AveragePoolingScoring',
+    'LLMRangeDetectionScoring',
     # Step 4
     'ThresholdDetermination',
     'PercentileThreshold',

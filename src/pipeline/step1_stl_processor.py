@@ -67,6 +67,8 @@ class STLProcessor(DataProcessor):
 
         # Set during transform()
         self.forecast_results: Optional[List[Dict]] = None
+        self.full_test_series: Optional[np.ndarray] = None
+        self.deseasonalized_series: Optional[np.ndarray] = None
 
     def fit_transform(self, windows: np.ndarray) -> np.ndarray:
         """Fit STL on training windows, compute statistics.
@@ -193,6 +195,7 @@ class STLProcessor(DataProcessor):
 
         # Reconstruct full test series for STL
         full_series = self._reconstruct_series(windows[:, :, 0])
+        self.full_test_series = full_series.copy()
 
         # Build expected series from TRAINING model (not test STL).
         # Using training trend + seasonal ensures anomalies in the test
@@ -202,6 +205,9 @@ class STLProcessor(DataProcessor):
         expected_trend = self.trend_slope * t_indices + self.trend_intercept
         expected_seasonal = self._extrapolate_seasonal(0, T_full)
         expected_series = expected_trend + expected_seasonal
+
+        # Store deseasonalized series (original - seasonal) for downstream use
+        self.deseasonalized_series = full_series - expected_seasonal
 
         # Generate per-window in-window forecasts
         self.forecast_results = []
@@ -259,6 +265,14 @@ class STLProcessor(DataProcessor):
     def get_train_statistics(self) -> Optional[Dict]:
         """Get training statistics from fit_transform()."""
         return self.train_statistics
+
+    def get_full_series(self) -> Optional[np.ndarray]:
+        """Get full reconstructed test series from last transform()."""
+        return self.full_test_series
+
+    def get_deseasonalized_series(self) -> Optional[np.ndarray]:
+        """Get deseasonalized series (original - seasonal) from last transform()."""
+        return self.deseasonalized_series
 
     # ------------------------------------------------------------------
     # Private helpers

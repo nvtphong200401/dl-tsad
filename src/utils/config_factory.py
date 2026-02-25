@@ -19,7 +19,7 @@ from ..pipeline import (
 from ..pipeline.step1_foundation_model_processor import FoundationModelProcessor
 from ..pipeline.step1_stl_processor import STLProcessor
 from ..pipeline.step2_detection import EvidenceBasedDetection
-from ..pipeline.step3_scoring import LLMReasoningScoring
+from ..pipeline.step3_scoring import LLMReasoningScoring, LLMRangeDetectionScoring
 
 # SOTA components (may not be available if archived)
 try:
@@ -137,6 +137,15 @@ def _build_scoring_method(config: Dict[str, Any]):
             batch_size=params.get('batch_size', 10),
             temperature=params.get('temperature'),
             pre_filter_percentile=params.get('pre_filter_percentile', 80.0),
+        )
+    elif scoring_type == 'LLMRangeDetectionScoring':
+        return LLMRangeDetectionScoring(
+            backend_type=params.get('backend_type', 'azure_openai'),
+            temperature=params.get('temperature'),
+            max_anomaly_ratio=params.get('max_anomaly_ratio', 0.01),
+            min_anomalies=params.get('min_anomalies', 3),
+            use_evidence_hints=params.get('use_evidence_hints', True),
+            use_deseasonalized=params.get('use_deseasonalized', True),
         )
     elif scoring_type == 'WeightedAverageScoring' and _SOTA_AVAILABLE:
         return WeightedAverageScoring()
