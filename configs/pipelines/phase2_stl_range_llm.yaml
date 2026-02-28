@@ -25,15 +25,15 @@ scoring:
   params:
     backend_type: "azure_openai"
     temperature: 0.0
-    max_anomaly_ratio: 0.01
+    max_anomaly_ratio: 0.005
     min_anomalies: 3
     use_evidence_hints: true
     use_deseasonalized: true
 
 postprocessing:
   threshold:
-    type: "PercentileThreshold"
+    type: "FixedThreshold"
     params:
-      percentile: 50.0
+      threshold: 0.5
   min_anomaly_length: 3
   merge_gap: 5

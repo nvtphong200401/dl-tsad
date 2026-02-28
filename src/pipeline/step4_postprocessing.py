@@ -45,6 +45,22 @@ class PercentileThreshold(ThresholdDetermination):
         return np.percentile(scores, self.percentile)
 
 
+class FixedThreshold(ThresholdDetermination):
+    """Use a fixed threshold value.
+
+    Best for binary scores (e.g., LLM range detection returns 0/1).
+    Use threshold=0.5 to separate binary 0s from 1s.
+    """
+
+    def __init__(self, threshold: float = 0.5):
+        self.threshold = threshold
+
+    def find_threshold(self,
+                      scores: np.ndarray,
+                      labels: Optional[np.ndarray] = None) -> float:
+        return self.threshold
+
+
 class F1OptimalThreshold(ThresholdDetermination):
     """Find threshold that maximizes F1 score on validation set
 
@@ -71,8 +87,8 @@ class F1OptimalThreshold(ThresholdDetermination):
             fp = np.sum((preds == 1) & (labels == 0))
             fn = np.sum((preds == 0) & (labels == 1))
 
-            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 1
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 1
             f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
             if f1 > best_f1:

@@ -1,0 +1,2 @@
+config,category,f1,precision,recall,pa_f1,vus_pr,detected,total_anomalies,n_series,total_points,num_train_series,time_s,label
+phase2_stl_range_llm,trend,0.3492673151588528,0.47058161772977836,0.27768189060010623,0.5046728971962616,0.18355606221845855,8889,15064,400,400000,5,883.2806901931763,phase2_stl_range_llm           | trend     

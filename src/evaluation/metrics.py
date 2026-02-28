@@ -37,8 +37,10 @@ def compute_precision_recall(y_true: np.ndarray, y_pred: np.ndarray) -> Tuple[fl
     fp = np.sum((y_pred == 1) & (y_true == 0))
     fn = np.sum((y_pred == 0) & (y_true == 1))
 
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    # No predictions made: precision is 1.0 (no false positives), not 0.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 1.0
+    # No actual anomalies: recall is 1.0 (nothing to miss), not 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 1.0
 
     return precision, recall
 
@@ -203,7 +205,7 @@ def compute_vus_pr(y_true: np.ndarray, scores: np.ndarray, num_thresholds: int =
         fn = np.sum((y_pred == 0) & (y_true == 1))
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 1.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 1.0
 
         precisions.append(precision)
         recalls.append(recall)

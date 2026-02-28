@@ -193,21 +193,42 @@ class STLProcessor(DataProcessor):
         normalized = (windows_flat - self.train_mean) / self.train_std
         normalized = normalized.reshape(N, W, D)
 
+        from statsmodels.tsa.seasonal import STL as _STL
+
         # Reconstruct full test series for STL
         full_series = self._reconstruct_series(windows[:, :, 0])
         self.full_test_series = full_series.copy()
 
-        # Build expected series from TRAINING model (not test STL).
-        # Using training trend + seasonal ensures anomalies in the test
-        # series produce large deviations from the expected baseline.
+        # Run STL on test series to get proper deseasonalized (residual) series.
+        # The residual = raw - trend - seasonal, which removes both the
+        # accumulating trend AND seasonal pattern. This is what the LLM sees.
+        try:
+            test_stl = _STL(
+                full_series,
+                period=self.detected_period,
+                seasonal=self._ensure_odd(max(self.seasonal, 7)),
+                trend=self.trend_smoother,
+                robust=self.robust,
+            ).fit()
+            # Residual is flat-centered — no drift at edges
+            self.deseasonalized_series = test_stl.resid
+            # Replace NaN edges with 0
+            self.deseasonalized_series = np.nan_to_num(
+                self.deseasonalized_series, nan=0.0
+            )
+        except Exception:
+            # Fallback: subtract training seasonal only
+            expected_seasonal = self._extrapolate_seasonal(0, len(full_series))
+            self.deseasonalized_series = full_series - expected_seasonal
+
+        # Build expected series from TRAINING model (not test STL)
+        # for in-window forecast evidence. Using training trend + seasonal
+        # ensures anomalies produce large deviations in evidence metrics.
         T_full = len(full_series)
         t_indices = np.arange(T_full)
         expected_trend = self.trend_slope * t_indices + self.trend_intercept
         expected_seasonal = self._extrapolate_seasonal(0, T_full)
         expected_series = expected_trend + expected_seasonal
-
-        # Store deseasonalized series (original - seasonal) for downstream use
-        self.deseasonalized_series = full_series - expected_seasonal
 
         # Generate per-window in-window forecasts
         self.forecast_results = []

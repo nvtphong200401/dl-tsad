@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.utils.config_factory import load_config, build_pipeline_from_config
 from src.data.anomllm_loader import load_anomllm_series, get_all_categories
 from src.evaluation.evaluator import Evaluator
+from src.utils.pipeline_logger import PipelineLogger
 
 DEFAULT_CONFIGS = [
     'baseline_f1optimal',
@@ -43,7 +44,8 @@ DEFAULT_CONFIGS = [
 CORE_CATEGORIES = ['point', 'range', 'trend', 'freq']
 
 
-def run_one_job(config_name, category, data_cache, num_train, project_root):
+def run_one_job(config_name, category, data_cache, num_train, project_root,
+                debug=False, debug_dir=None):
     """Run one (config, category) pair. Each call runs in its own thread."""
     evaluator = Evaluator()
     config_path = os.path.join(project_root, f"configs/pipelines/{config_name}.yaml")
@@ -69,6 +71,11 @@ def run_one_job(config_name, category, data_cache, num_train, project_root):
         pipeline = build_pipeline_from_config(config)
         pipeline.fit(X_train)
 
+        # Setup debug logger
+        logger = None
+        if debug and debug_dir:
+            logger = PipelineLogger(debug_dir, config_name, category)
+
         # Evaluate per-series
         all_y_true, all_y_pred, all_scores = [], [], []
         total_time = 0
@@ -86,8 +93,16 @@ def run_one_job(config_name, category, data_cache, num_train, project_root):
                 all_scores.append(result.point_scores)
                 n_ok += 1
                 print(f"  {label} | Series {n_ok}/{len(eval_series)} evaluated ({len(labels)} points, {labels.sum()} anomalies)")
+
+                # Log debug info for this series
+                if logger:
+                    logger.log_series(n_ok - 1, pipeline, result, labels)
+
             except Exception:
                 continue
+
+        if logger:
+            logger.close()
 
         if n_ok == 0:
             return {'error': f"All {len(eval_series)} series failed", 'label': label}
@@ -105,6 +120,7 @@ def run_one_job(config_name, category, data_cache, num_train, project_root):
             'precision': ev.precision,
             'recall': ev.recall,
             'pa_f1': ev.pa_f1,
+            'vus_pr': ev.vus_pr,
             'detected': int(y_pred.sum()),
             'total_anomalies': int(y_true.sum()),
             'n_series': n_ok,
@@ -129,6 +145,8 @@ def main():
                         help='Max parallel threads (default: all jobs)')
     parser.add_argument('--data-path', default='src/data/synthetic')
     parser.add_argument('--output', default='src/results/synthetic')
+    parser.add_argument('--debug', action='store_true',
+                        help='Export per-series debug logs (JSONL)')
     args = parser.parse_args()
 
     categories = get_all_categories() if args.all_categories else args.categories
@@ -148,7 +166,10 @@ def main():
     print(f"Jobs:         {n_jobs} ({len(configs)} configs x {len(categories)} categories)")
     print(f"Threads:      {max_workers}")
     print(f"Train:        {args.num_train} series (few-shot)")
+    print(f"Debug logs:   {'ON' if args.debug else 'OFF'}")
     print(f"Project root: {project_root}")
+
+    debug_dir = os.path.join(args.output, "debug") if args.debug else None
 
     # Load all datasets upfront (shared read-only across threads)
     print(f"\nLoading datasets...")
@@ -195,8 +216,9 @@ def main():
             all_results.append(result)
             cat = result['category']
             n_eval = len(data_cache[cat][1]) if cat in data_cache else '?'
+            vus = result.get('vus_pr', 0) or 0
             print(f"  {label} | F1={result['f1']:.3f}  PA-F1={result['pa_f1']:.3f}  "
-                  f"P={result['precision']:.3f}  R={result['recall']:.3f}  "
+                  f"VUS-PR={vus:.3f}  P={result['precision']:.3f}  R={result['recall']:.3f}  "
                   f"({result['time_s']:.0f}s, {result['n_series']}/{n_eval} series)")
 
     # Phase 1: Run CPU jobs in parallel
@@ -207,7 +229,8 @@ def main():
             futures = {}
             for cfg, cat in cpu_jobs:
                 future = executor.submit(
-                    run_one_job, cfg, cat, data_cache, args.num_train, project_root
+                    run_one_job, cfg, cat, data_cache, args.num_train, project_root,
+                    args.debug, debug_dir
                 )
                 futures[future] = (cfg, cat)
             for future in as_completed(futures):
@@ -217,7 +240,8 @@ def main():
     if gpu_jobs:
         print(f"\n--- GPU jobs ({len(gpu_jobs)}) sequential ---")
         for cfg, cat in gpu_jobs:
-            result = run_one_job(cfg, cat, data_cache, args.num_train, project_root)
+            result = run_one_job(cfg, cat, data_cache, args.num_train, project_root,
+                                args.debug, debug_dir)
             collect_result(result)
 
     wall_time = time.time() - t_start
@@ -243,15 +267,27 @@ def main():
     pivot_pa = df.pivot_table(index='category', columns='config', values='pa_f1')
     print(pivot_pa.to_string(float_format='{:.3f}'.format))
 
+    # VUS-PR comparison
+    if 'vus_pr' in df.columns:
+        print(f"\n{'='*70}")
+        print("VUS-PR SCORE BY CATEGORY")
+        print(f"{'='*70}")
+        pivot_vus = df.pivot_table(index='category', columns='config', values='vus_pr')
+        print(pivot_vus.to_string(float_format='{:.3f}'.format))
+
     # Summary
     print(f"\n{'='*70}")
     print("AVERAGE ACROSS CATEGORIES")
     print(f"{'='*70}")
-    summary = df.groupby('config').agg({
-        'f1': 'mean', 'precision': 'mean', 'recall': 'mean',
-        'pa_f1': 'mean', 'time_s': 'sum',
-    }).round(3)
-    summary.columns = ['Avg F1', 'Avg Prec', 'Avg Recall', 'Avg PA-F1', 'Total Time(s)']
+    agg_cols = {'f1': 'mean', 'precision': 'mean', 'recall': 'mean', 'pa_f1': 'mean'}
+    col_names = ['Avg F1', 'Avg Prec', 'Avg Recall', 'Avg PA-F1']
+    if 'vus_pr' in df.columns:
+        agg_cols['vus_pr'] = 'mean'
+        col_names.append('Avg VUS-PR')
+    agg_cols['time_s'] = 'sum'
+    col_names.append('Total Time(s)')
+    summary = df.groupby('config').agg(agg_cols).round(3)
+    summary.columns = col_names
     print(summary.to_string())
 
     # Save
@@ -271,6 +307,7 @@ def main():
             cfg: {
                 'avg_f1': float(df[df['config'] == cfg]['f1'].mean()),
                 'avg_pa_f1': float(df[df['config'] == cfg]['pa_f1'].mean()),
+                'avg_vus_pr': float(df[df['config'] == cfg]['vus_pr'].mean()) if 'vus_pr' in df.columns else None,
             }
             for cfg in configs if cfg in df['config'].values
         }

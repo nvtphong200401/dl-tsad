@@ -356,16 +356,17 @@ class LLMRangeDetectionScoring(ScoringMethod):
         stride: int,
         original_length: int
     ) -> np.ndarray:
-        """Score using LLM range detection on full series.
+        """Score using LLM range detection with CUSUM pre-check and validation.
 
-        Sends the full (deseasonalized) series to the LLM in one call.
-        LLM returns anomaly ranges which are directly converted to
-        point-level binary scores.
+        Strategy 1: Skip LLM if CUSUM is flat (no anomaly signal).
+        Strategy 2: Validate LLM ranges against CUSUM — reject ranges
+                    where CUSUM is low (false positives).
         """
         from llm.range_prompt_builder import (
             RANGE_DETECTION_SYSTEM_PROMPT,
             build_range_detection_prompt,
             build_evidence_summary,
+            compute_derived_signals,
         )
         from llm.range_output_parser import parse_range_output, ranges_to_point_scores
 
@@ -379,7 +380,6 @@ class LLMRangeDetectionScoring(ScoringMethod):
             print(f"  LLM Range Detection: using raw series "
                   f"({len(series_to_send)} points)")
         else:
-            # Fallback: reconstruct from windows
             series_to_send = self._reconstruct_from_windows(
                 stride, original_length
             )
@@ -394,13 +394,30 @@ class LLMRangeDetectionScoring(ScoringMethod):
             padded[:len(series_to_send)] = series_to_send
             series_to_send = padded
 
-        # Compute anomaly count constraint (AnoAgent formula)
+        # ----------------------------------------------------------
+        # Strategy 1: CUSUM pre-check — skip LLM if no anomaly onset
+        # CUSUM is best for pre-check: 0.0 for normal, >2.0 for anomalous
+        # ----------------------------------------------------------
+        cusum, rmdev = compute_derived_signals(series_to_send)
+        std = max(float(np.std(series_to_send)), 1e-10)
+        cusum_max_scaled = float(cusum.max()) / (10.0 * std) * 10.0
+        cusum_skip_threshold = 2.0
+
+        if cusum_max_scaled < cusum_skip_threshold:
+            print(f"  Pre-check: CUSUM flat (max={cusum_max_scaled:.2f} < {cusum_skip_threshold})"
+                  f" → skipping LLM, no anomalies")
+            self.last_ranges = []
+            return np.zeros(original_length)
+
+        print(f"  Pre-check: signal detected (CUSUM={cusum_max_scaled:.2f})")
+
+        # Compute anomaly count constraint
         max_anomalies = max(
             self.min_anomalies,
             int(original_length * self.max_anomaly_ratio)
         )
 
-        # Build evidence summary if available and enabled
+        # Build evidence summary if available
         evidence_summary = None
         if (self.use_evidence_hints
                 and subsequence_scores is not None
@@ -409,7 +426,7 @@ class LLMRangeDetectionScoring(ScoringMethod):
                 subsequence_scores, window_size, stride, top_k=5
             )
 
-        # Build prompt
+        # Build prompt and call LLM
         system_prompt = RANGE_DETECTION_SYSTEM_PROMPT.format(
             max_anomalies=max_anomalies
         )
@@ -419,17 +436,14 @@ class LLMRangeDetectionScoring(ScoringMethod):
             evidence_summary=evidence_summary,
         )
 
-        # Call LLM (single call per series)
         try:
             raw_response = self.backend.generate_with_retry(
                 system_prompt, user_prompt, self.temperature
             )
             self.call_count += 1
 
-            # Parse ranges
             parsed = parse_range_output(raw_response)
             anomaly_ranges = parsed.get("anomalies", [])
-            self.last_ranges = anomaly_ranges
 
             if parsed.get("parse_error"):
                 print(f"  Warning: parse issue: {parsed['parse_error']}")
@@ -437,13 +451,66 @@ class LLMRangeDetectionScoring(ScoringMethod):
             print(f"  LLM returned {len(anomaly_ranges)} anomaly ranges "
                   f"(max allowed: {max_anomalies})")
 
-            # Convert ranges to point scores
-            point_scores = ranges_to_point_scores(anomaly_ranges, original_length)
+            # ----------------------------------------------------------
+            # Strategy 2: Validate LLM ranges using running mean deviation
+            # ----------------------------------------------------------
+            rmdev_validate_threshold = 0.5  # Min rmdev in std units
+            validated_ranges = []
+            for r in anomaly_ranges:
+                s = max(0, r["start"])
+                e = min(original_length, r["end"])
+                if s >= e:
+                    continue
+                range_rmdev = np.abs(rmdev[s:e]).mean() / std
+                if range_rmdev >= rmdev_validate_threshold:
+                    validated_ranges.append(r)
+                    print(f"    Range [{s},{e}): rmdev={range_rmdev:.2f}σ → KEPT")
+                else:
+                    print(f"    Range [{s},{e}): rmdev={range_rmdev:.2f}σ → REJECTED")
+
+            # ----------------------------------------------------------
+            # Strategy 3: Refine ranges using wide running mean signal
+            # Both EXTENDS narrow ranges (LLM onset-only) and TRIMS
+            # wide ranges (LLM over-detection). The final range covers
+            # exactly where running mean is elevated above threshold.
+            # ----------------------------------------------------------
+            _, rmdev_wide = compute_derived_signals(series_to_send, running_mean_window=100)
+            rmdev_refine = np.abs(rmdev_wide) / std
+            rmdev_refine_threshold = 0.5  # Keep points where rmdev > 0.5s
+            refined_ranges = []
+            for r in validated_ranges:
+                s = max(0, r["start"])
+                e = min(original_length, r["end"])
+
+                # Find the peak rmdev point within or near the LLM range
+                search_s = max(0, s - 50)
+                search_e = min(original_length, e + 50)
+                peak_idx = search_s + int(np.argmax(rmdev_refine[search_s:search_e]))
+
+                # Grow outward from peak while rmdev is above threshold
+                new_s = peak_idx
+                while new_s > 0 and rmdev_refine[new_s - 1] >= rmdev_refine_threshold:
+                    new_s -= 1
+                new_e = peak_idx + 1
+                while new_e < original_length and rmdev_refine[new_e] >= rmdev_refine_threshold:
+                    new_e += 1
+
+                if new_e - new_s >= 3:  # Minimum 3 points
+                    action = "refined" if (new_s != s or new_e != e) else "kept"
+                    print(f"    {action.title()} [{s},{e}) -> [{new_s},{new_e})")
+                    refined_ranges.append({"start": new_s, "end": new_e})
+                else:
+                    print(f"    Dropped [{s},{e}) (refined to <3 points)")
+
+            self.last_ranges = refined_ranges
+
+            # Convert refined ranges to point scores
+            point_scores = ranges_to_point_scores(refined_ranges, original_length)
 
             n_flagged = int(point_scores.sum())
             pct_flagged = 100 * n_flagged / original_length
-            print(f"  Flagged {n_flagged}/{original_length} points "
-                  f"({pct_flagged:.1f}%)")
+            print(f"  Final: {n_flagged}/{original_length} points flagged "
+                  f"({pct_flagged:.1f}%), {len(validated_ranges)}/{len(anomaly_ranges)} ranges kept")
 
             return point_scores
 

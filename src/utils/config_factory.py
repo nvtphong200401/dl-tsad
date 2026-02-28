@@ -166,6 +166,11 @@ def _build_post_processor(config: Dict[str, Any]):
         threshold_method = PercentileThreshold(percentile=percentile)
     elif threshold_type == 'F1OptimalThreshold':
         threshold_method = F1OptimalThreshold()
+    elif threshold_type == 'FixedThreshold':
+        from ..pipeline.step4_postprocessing import FixedThreshold
+        threshold_method = FixedThreshold(
+            threshold=threshold_params.get('threshold', 0.5)
+        )
     else:
         raise ValueError(f"Unknown threshold type: {threshold_type}")
 
