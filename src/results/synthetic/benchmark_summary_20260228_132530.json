@@ -1,0 +1,22 @@
+{
+  "timestamp": "20260228_132530",
+  "wall_time_s": 4065.2011184692383,
+  "configs": [
+    "phase2_stl_range_llm"
+  ],
+  "categories": [
+    "point",
+    "range",
+    "trend",
+    "freq"
+  ],
+  "num_train_series": 5,
+  "workers": 4,
+  "per_config": {
+    "phase2_stl_range_llm": {
+      "avg_f1": 0.22716292558284149,
+      "avg_pa_f1": 0.34904308428880665,
+      "avg_vus_pr": 0.14101863804096787
+    }
+  }
+}
